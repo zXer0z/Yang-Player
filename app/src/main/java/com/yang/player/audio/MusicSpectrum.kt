@@ -12,11 +12,15 @@ data class SpectrumFrame(val bands: FloatArray = FloatArray(24), val capturedAt:
 
 /** Read-only PCM tap. Two fixed windows bound work and memory; FFT never runs on the audio thread. */
 object MusicSpectrum {
-    private const val N = 4096
+    private const val N = 2048
+    private const val HOP = 512
     private data class Window(val samples: FloatArray = FloatArray(N), var rate: Int = 44100, var at: Long = 0)
     private val spare = AtomicReference<Window?>(Window())
     private val pending = AtomicReference<Window?>(null)
     private var capture = Window()
+    private val history = FloatArray(N)
+    private var historyPosition = 0
+    private var sinceWindow = 0
     private var filled = 0
     private var sourceRate = 0
     @Volatile private var enabled = false
@@ -33,16 +37,10 @@ object MusicSpectrum {
         val width = when (encoding) { 3 -> 1; 2 -> 2; 21 -> 3; 22, 4 -> 4; else -> return }
         val stride = width * channels
         if (seenGeneration != generation || sourceRate != rate) {
-            filled = 0; sourceRate = rate; seenGeneration = generation
+            filled = 0; historyPosition = 0; sinceWindow = 0; sourceRate = rate; seenGeneration = generation
         }
         var position = start
         while (position + stride <= end) {
-            // If both windows are busy, drop visualization data rather than delay audio.
-            if (filled == N) {
-                val next = spare.getAndSet(null) ?: return
-                capture.rate = rate; capture.at = SystemClock.elapsedRealtime()
-                pending.set(capture); capture = next; filled = 0
-            }
             var sample = 0f
             for (channel in 0 until channels) {
                 val offset = position + channel * width
@@ -55,7 +53,21 @@ object MusicSpectrum {
                     else -> Float.fromBits(byte(0) or (byte(1) shl 8) or (byte(2) shl 16) or (byte(3) shl 24))
                 }
             }
-            capture.samples[filled++] = (sample / channels).let { if (it.isFinite()) it.coerceIn(-1f, 1f) else 0f }
+            history[historyPosition] = (sample / channels).let { if (it.isFinite()) it.coerceIn(-1f, 1f) else 0f }
+            historyPosition = (historyPosition + 1) and (N - 1)
+            if (filled < N) filled++
+            sinceWindow++
+            if (filled == N && sinceWindow >= HOP) {
+                sinceWindow = 0
+                // Overlapping windows follow short transients. Never wait for the FFT consumer.
+                val next = spare.getAndSet(null)
+                if (next != null) {
+                    System.arraycopy(history, historyPosition, capture.samples, 0, N - historyPosition)
+                    System.arraycopy(history, 0, capture.samples, N - historyPosition, historyPosition)
+                    capture.rate = rate; capture.at = SystemClock.elapsedRealtime()
+                    pending.set(capture); capture = next
+                }
+            }
             position += stride
         }
     }
@@ -116,7 +128,7 @@ object MusicSpectrum {
                         _frame.value = SpectrumFrame(bands, window.at)
                     } finally { spare.set(window) }
                 }
-                delay(40)
+                delay(16)
             }
             @Suppress("UNREACHABLE_CODE") error("Spectrum stopped")
         } finally {
