@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="sharedpref" path="."/>
+    <exclude domain="sharedpref" path="youtube_auth.xml"/>
+    <exclude domain="sharedpref" path="youtube_profile.xml"/>
+</full-backup-content>
+
