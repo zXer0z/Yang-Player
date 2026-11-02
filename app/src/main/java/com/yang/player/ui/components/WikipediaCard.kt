@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,6 +52,7 @@ fun WikipediaCard(title: String, artist: String, isArtist: Boolean) {
                 text = article.full,
                 modifier = Modifier.fillMaxWidth(),
                 color = Color.White.copy(alpha = .65f),
+                textAlign = TextAlign.Center,
                 fontSize = 13.sp,
                 lineHeight = 21.sp,
                 maxLines = if (expanded) Int.MAX_VALUE else 4,
