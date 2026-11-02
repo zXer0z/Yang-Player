@@ -4,11 +4,11 @@
 <p align="center"><b>Android 8.0+ · Kotlin · Jetpack Compose · Media3 · Motor nativo en C</b></p>
 <p align="center"><a href="https://github.com/zXer0z/Yin-Control">Conoce Yin Control</a> · <a href="#compilar">Compilar</a> · <a href="docs/audio-engine.md">Motor de audio</a></p>
 
-Yang es un reproductor Android para escuchar y organizar música local, con una interfaz que toma sus colores de la carátula. Funciona sin root y puede delegar el audio en **[Yin Control](https://github.com/zXer0z/Yin-Control)** cuando ese motor está disponible y autorizado.
+Yang es un reproductor Android para escuchar y organizar música local, con una interfaz que toma sus colores de la carátula. Y puede delegar el audio en **[Yin Control](https://github.com/zXer0z/Yin-Control)** cuando ese motor está disponible y autorizado.
 
 ## Así se ve
 
-Capturas reales de la aplicación en un LG V60. Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen canciones en este repositorio.
+Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen canciones en este repositorio.
 
 <table><tr><th>Inicio</th><th>Reproductor</th><th>HiFi</th></tr>
 <tr><td><img src="docs/screenshots/home.png" width="240" alt="Inicio de Yang"></td><td><img src="docs/screenshots/player.png" width="240" alt="Reproductor de Yang"></td><td><img src="docs/screenshots/hifi.png" width="240" alt="Perfiles de HiFi"></td></tr></table>
