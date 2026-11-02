@@ -45,7 +45,7 @@ class AudioScanner(private val context: Context) {
             MediaStore.Audio.Media.MIME_TYPE,
             MediaStore.Audio.Media.DATE_MODIFIED,
             MediaStore.Audio.Media.SIZE
-        )
+        ).let { if (android.os.Build.VERSION.SDK_INT >= 30) it + MediaStore.Audio.Media.ALBUM_ARTIST else it }
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 " +
                 "AND (${MediaStore.Audio.Media.IS_RINGTONE} == 0) " +
@@ -72,6 +72,7 @@ class AudioScanner(private val context: Context) {
                 val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val albumColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                val albumArtistColumn = it.getColumnIndex("album_artist")
                 val durationColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val dataColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
                 val mimeColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
@@ -169,7 +170,8 @@ class AudioScanner(private val context: Context) {
                             sampleRateHz = sampleRate,
                             bitDepth = bitDepth,
                             isHiRes = sampleRate > 48000 || bitDepth > 16,
-                            isFavorite = false
+                            isFavorite = false,
+                            albumArtist = if (albumArtistColumn >= 0) it.getString(albumArtistColumn).orEmpty().trim() else ""
                         )
                     )
                 }

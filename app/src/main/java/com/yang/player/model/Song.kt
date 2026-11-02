@@ -13,7 +13,8 @@ data class Song(
     val sampleRateHz: Int = 44100,
     val bitDepth: Int = 16,
     val isHiRes: Boolean = false,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val albumArtist: String = ""
 ) {
     val isOnline: Boolean get() = mediaUri.startsWith("yangyoutube://")
     // Evaluated once at object creation - avoids Formatter/Regex overhead during 120fps fling

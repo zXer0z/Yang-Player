@@ -22,13 +22,13 @@ class PlaylistStore private constructor(context: Context) {
         val a=JSONArray(prefs.getString("lists","[]"));(0 until a.length()).mapNotNull { i -> runCatching {
             val j=a.getJSONObject(i);val tracks=j.getJSONArray("songs")
             LocalPlaylist(j.getString("id"),j.getString("name"),(0 until tracks.length()).mapNotNull { k -> runCatching {
-                val t=tracks.getJSONObject(k);Song(id=t.getString("id"),title=t.getString("title"),artist=t.optString("artist"),album=t.optString("album"),durationMs=t.optLong("duration"),mediaUri=t.getString("uri"),artworkUri=t.optString("art").takeIf { it.isNotBlank() },dataPath=t.optString("path"),format=runCatching { AudioFormat.valueOf(t.optString("format")) }.getOrDefault(AudioFormat.UNKNOWN),sampleRateHz=t.optInt("rate",44100),bitDepth=t.optInt("bits",16),isHiRes=t.optBoolean("hires"))
+                val t=tracks.getJSONObject(k);Song(id=t.getString("id"),title=t.getString("title"),artist=t.optString("artist"),album=t.optString("album"),durationMs=t.optLong("duration"),mediaUri=t.getString("uri"),artworkUri=t.optString("art").takeIf { it.isNotBlank() },dataPath=t.optString("path"),format=runCatching { AudioFormat.valueOf(t.optString("format")) }.getOrDefault(AudioFormat.UNKNOWN),sampleRateHz=t.optInt("rate",44100),bitDepth=t.optInt("bits",16),isHiRes=t.optBoolean("hires"),albumArtist=t.optString("albumArtist"))
             }.getOrNull() }.distinctBy { it.id })
         }.getOrNull() }
     }.getOrDefault(emptyList()).map { it.copy(songs = it.songs.map(completion::apply)) }
     @Synchronized fun refreshMetadata() { state.value = read() }
     private fun save(lists: List<LocalPlaylist>) {
-        val a=JSONArray();lists.forEach { list -> val tracks=JSONArray();list.songs.forEach { t -> tracks.put(JSONObject().put("id",t.id).put("title",t.title).put("artist",t.artist).put("album",t.album).put("duration",t.durationMs).put("uri",t.mediaUri).put("art",t.artworkUri.orEmpty()).put("path",t.dataPath).put("format",t.format.name).put("rate",t.sampleRateHz).put("bits",t.bitDepth).put("hires",t.isHiRes)) };a.put(JSONObject().put("id",list.id).put("name",list.name).put("songs",tracks)) }
+        val a=JSONArray();lists.forEach { list -> val tracks=JSONArray();list.songs.forEach { t -> tracks.put(JSONObject().put("id",t.id).put("title",t.title).put("artist",t.artist).put("album",t.album).put("duration",t.durationMs).put("uri",t.mediaUri).put("art",t.artworkUri.orEmpty()).put("path",t.dataPath).put("format",t.format.name).put("rate",t.sampleRateHz).put("bits",t.bitDepth).put("hires",t.isHiRes).put("albumArtist",t.albumArtist)) };a.put(JSONObject().put("id",list.id).put("name",list.name).put("songs",tracks)) }
         prefs.edit().putString("lists",a.toString()).apply();state.value=lists
     }
     @Synchronized fun removeSongFile(song: Song) {

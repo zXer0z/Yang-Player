@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Job
@@ -43,7 +44,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun openPlaylists() = openLibrary(LibraryDestination("playlists"))
     fun openAlbum(album: Album) = openLibrary(LibraryDestination("albums", album.id, album.name))
     fun openFavorites() = openLibrary(LibraryDestination("favorites"))
-    fun openArtist(name: String) = openLibrary(LibraryDestination("artists", name.trim().lowercase(java.util.Locale.ROOT), name))
+    fun openArtist(name: String) {
+        val primary = collections.value.primaryArtist(name)
+        openLibrary(LibraryDestination("artists", collections.value.artistKey(name), primary))
+    }
     fun openAlbumByName(name: String) { albums.value.firstOrNull { it.name == name }?.let(::openAlbum) }
 
     private val playerController = MusicPlayerController(application)
@@ -88,9 +92,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val recommendedAlbums = _recommendedAlbums.asStateFlow()
 
     // Dynamically derive albums from real scanned songs
-    val albums: StateFlow<List<Album>> = _allSongs.map { songs ->
-        HomeRecommendations.buildAlbums(songs)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val collections = _allSongs.map { com.yang.player.data.LibraryGrouping(it) }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.yang.player.data.LibraryGrouping(emptyList()))
+    val albums: StateFlow<List<Album>> = collections.map { it.albums }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
@@ -135,7 +139,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playAlbum(album: Album) {
-        val albumSongs = _allSongs.value.filter { HomeRecommendations.albumKey(it) == album.id }
+        val albumSongs = collections.value.songsByAlbum(album.id)
         if (albumSongs.isNotEmpty()) {
             playerController.playSong(albumSongs.first(), albumSongs)
         }

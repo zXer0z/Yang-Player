@@ -24,3 +24,11 @@ Iconos originales de una familia común inspirada en yin-yang: Yang claro/ámbar
 Compilación release de ambos APK con R8, verificación de firmas e instalación en el LG V60. Consulta pública a Wikipedia para verificar los campos de búsqueda/extractos. Revisión de arranque y presentación. No se ejecutaron pruebas automatizadas ni se eliminaron canciones. Las pruebas funcionales de escucha, repetición y temporizador las realiza el usuario.
 
 Referencias: https://www.mediawiki.org/wiki/Extension:TextExtracts y https://developer.android.com/media/media3/exoplayer/playlists.
+
+## Agrupación de artistas y álbumes
+
+La biblioteca comparte un índice para listados, detalles y colas. Las colaboraciones con créditos reconocibles aparecen en cada artista participante, sin repetir la misma pista dentro de su página. Se normalizan espacios, mayúsculas y Unicode. Los separadores ambiguos requieren evidencia en la biblioteca; los nombres compuestos de bandas se conservan cuando no se puede distinguir una colaboración. Los créditos originales de cada canción no cambian.
+
+Los álbumes usan el título y la etiqueta de artista del álbum; si falta esta última, se usa el artista principal reconocido. Así Bylaw - EP reúne sus cinco canciones bajo Martin Garrix sin mezclar discos del mismo nombre de otros artistas. MediaStore aporta la etiqueta en Android 11 o superior; las carpetas SAF la leen del audio y actualizan la caché anterior. Se conserva también en playlists y sesiones.
+
+Las flechas de volver quedan fuera de las listas, visibles al desplazar. Abrir un álbum o artista utiliza una única ruta de detalle y conserva la posición de la lista al volver. El margen inferior reserva el espacio del dock expandido para evitar cambios de geometría durante su animación. La agrupación del listado se calcula fuera del hilo de interfaz y solo al cambiar la biblioteca.

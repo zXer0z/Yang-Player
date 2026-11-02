@@ -58,7 +58,7 @@ class DocumentAudioLibrary(private val context: Context) {
                             if (path != null && !paths.add(path)) continue
                             val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
                             val stamp = "${cursor.getLong(3)}:${cursor.getLong(4)}"
-                            val entry = cached.optJSONObject(uri.toString())?.takeIf { cursor.getLong(3) > 0 && it.optString("stamp") == stamp && it.has("rate") }
+                            val entry = cached.optJSONObject(uri.toString())?.takeIf { cursor.getLong(3) > 0 && it.optString("stamp") == stamp && it.has("rate") && it.has("albumArtist") }
                             val song = runCatching { if (entry != null) decode(entry, uri) else readSong(uri, name, mime) }.getOrNull()
                             if (song != null) {
                                 result.add(song)
@@ -94,7 +94,8 @@ class DocumentAudioLibrary(private val context: Context) {
             return Song(id(uri), tag(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: filename.substringBeforeLast('.'),
                 tag(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Desconocido",
                 tag(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Álbum desconocido", duration, uri.toString(), uri.toString(),
-                format = format, sampleRateHz = source.rate, bitDepth = source.bits, isHiRes = source.rate > 48000 || source.bits > 16)
+                format = format, sampleRateHz = source.rate, bitDepth = source.bits, isHiRes = source.rate > 48000 || source.bits > 16,
+                albumArtist = tag(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST).orEmpty())
         } finally { reader.release() }
     }
     private fun id(uri: Uri): String {
@@ -107,10 +108,10 @@ class DocumentAudioLibrary(private val context: Context) {
         return (if (volume.equals("primary", true)) "/storage/emulated/0/" else "/storage/$volume/") + id.substringAfter(':')
     }
     private fun encode(song: Song) = JSONObject().put("title", song.title).put("artist", song.artist).put("album", song.album)
-        .put("duration", song.durationMs).put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth)
+        .put("albumArtist", song.albumArtist).put("duration", song.durationMs).put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth)
     private fun decode(json: JSONObject, uri: Uri): Song {
         val format = AudioFormat.valueOf(json.getString("format"))
         return Song(id(uri), json.getString("title"), json.getString("artist"), json.getString("album"), json.getLong("duration"),
-            uri.toString(), uri.toString(), format = format, sampleRateHz = json.optInt("rate"), bitDepth = json.optInt("bits"), isHiRes = json.optInt("rate") > 48000 || json.optInt("bits") > 16)
+            uri.toString(), uri.toString(), format = format, sampleRateHz = json.optInt("rate"), bitDepth = json.optInt("bits"), isHiRes = json.optInt("rate") > 48000 || json.optInt("bits") > 16, albumArtist = json.optString("albumArtist"))
     }
 }

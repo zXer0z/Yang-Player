@@ -12,16 +12,7 @@ data class HomeSelection(val featured: List<Song>, val suggestions: List<Song>, 
 /** Deterministic within a day, with listening affinity and room for discovery. */
 object HomeRecommendations {
     private fun normalized(value: String) = value.trim().lowercase(Locale.ROOT)
-    fun albumKey(song: Song) = "${normalized(song.album)}::${normalized(song.artist)}"
-
-    fun buildAlbums(songs: List<Song>): List<Album> = songs
-        .filter { normalized(it.album) !in setOf("", "álbum desconocido", "unknown", "<unknown>") }
-        .groupBy(::albumKey).map { (key, tracks) ->
-            val first = tracks.first()
-            Album(key, first.album, first.artist,
-                tracks.firstOrNull { !it.artworkUri.isNullOrBlank() }?.artworkUri,
-                tracks.size, tracks.firstOrNull { it.isHiRes }?.format ?: first.format)
-        }.sortedBy { normalized(it.name) }
+    fun buildAlbums(songs: List<Song>): List<Album> = LibraryGrouping(songs).albums
 
     fun resumePosition(song: Song, profile: ListeningProfile): Long {
         val stats = profile.tracks[song.id] ?: return 0
@@ -38,6 +29,7 @@ object HomeRecommendations {
         day: Long = LocalDate.now().toEpochDay()
     ): HomeSelection {
         val library = songs.distinctBy { it.id }
+        val collections = LibraryGrouping(library)
         if (library.isEmpty()) return HomeSelection(emptyList(), emptyList(), emptyList())
         val affinity = library.groupBy { normalized(it.artist) }.mapValues { (_, tracks) ->
             tracks.sumOf { song ->
@@ -68,7 +60,7 @@ object HomeRecommendations {
             val selected = mutableListOf<Song>()
             candidates.distinctBy { it.id }.forEach { song ->
                 if (selected.size < count && selected.count { normalized(it.artist) == normalized(song.artist) } < 2 &&
-                    selected.none { albumKey(it) == albumKey(song) }) selected.add(song)
+                    selected.none { collections.albumKey(it) == collections.albumKey(song) }) selected.add(song)
             }
             candidates.distinctBy { it.id }.forEach { song ->
                 if (selected.size < count && selected.none { it.id == song.id }) selected.add(song)
@@ -77,8 +69,8 @@ object HomeRecommendations {
         }
         val featured = diverse(unfinished + recent + discovery, 6)
         val suggestions = diverse(discovery.filter { song -> featured.none { it.id == song.id } } + discovery, 4)
-        val albumTracks = library.groupBy(::albumKey)
-        val rankedAlbums = buildAlbums(library).sortedByDescending { album ->
+        val albumTracks = collections.albumTracks
+        val rankedAlbums = collections.albums.sortedByDescending { album ->
             val tracks = albumTracks[album.id].orEmpty()
             tracks.maxOfOrNull(::score)?.plus(noise(album.id) * 5) ?: 0.0
         }

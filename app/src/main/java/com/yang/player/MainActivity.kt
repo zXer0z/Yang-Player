@@ -163,23 +163,23 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
     val favoriteSongs by viewModel.favoriteSongs.collectAsState()
     val allSongs by viewModel.allSongs.collectAsState()
     val albums by viewModel.albums.collectAsState()
+    val collections by viewModel.collections.collectAsState()
     val account by viewModel.online.account.collectAsState()
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsState()
     val libraryDestination by viewModel.libraryDestination.collectAsState()
     val globalDetail = libraryDestination?.key?.isNotBlank() == true
-    val detailTracks = remember(libraryDestination, allSongs) { when(libraryDestination?.page) {
-        "albums" -> allSongs.filter { HomeRecommendations.albumKey(it) == libraryDestination?.key }
-        "artists" -> allSongs.filter { it.artist.trim().lowercase(java.util.Locale.ROOT) == libraryDestination?.key }
+    val detailTracks = remember(libraryDestination, collections) { when(libraryDestination?.page) {
+        "albums" -> collections.songsByAlbum(libraryDestination?.key.orEmpty())
+        "artists" -> collections.songsByArtist(libraryDestination?.key.orEmpty())
         else -> emptyList()
     } }
     val globalCover = if(globalDetail) detailTracks.firstOrNull { it.artworkUri != null } ?: detailTracks.firstOrNull() else null
     BackHandler(globalDetail && !isFullPlayerVisible) { viewModel.consumeLibraryDestination() }
     // Keep the artwork palette warm while browsing, so opening the sheet never
     // starts with a different fallback color or repeats artwork extraction.
-    var libraryArtwork by remember { mutableStateOf<com.yang.player.model.Song?>(null) }
     val playingPalette = rememberArtworkPalette(playerState.currentSong)
-    val libraryPalette = rememberArtworkPalette(globalCover ?: libraryArtwork)
-    val artworkPalette = if ((globalCover != null || selectedTab == NavigationTab.TU && libraryArtwork != null) && !isFullPlayerVisible) libraryPalette else playingPalette
+    val libraryPalette = rememberArtworkPalette(globalCover)
+    val artworkPalette = if (globalCover != null && !isFullPlayerVisible) libraryPalette else playingPalette
     val artworkAccent = artworkPalette.accentColor // The backdrop animates in drawing; avoid recomposing the whole UI every frame.
     val backdropLayer = rememberGraphicsLayer()
     var backdropOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -229,7 +229,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
         ) {
             ArtworkAtmosphere(artworkPalette)
             // Insets protect content, while the atmosphere still fills system bars.
-            Box(Modifier.fillMaxSize().then(if(globalDetail || selectedTab == NavigationTab.TU && libraryArtwork != null) Modifier else Modifier.statusBarsPadding()).nestedScroll(dockScrollConnection)) {
+            Box(Modifier.fillMaxSize().then(if(globalDetail) Modifier else Modifier.statusBarsPadding()).nestedScroll(dockScrollConnection)) {
             if(globalDetail) {
                 CollectionDetailScreen(libraryDestination?.title.orEmpty(), libraryDestination?.page == "artists", detailTracks, favoriteSongs.map { it.id }.toSet(), playerState.currentSong?.id, playerState.isPlaying,
                     dockHeight + 12.dp, onBack=viewModel::consumeLibraryDestination, onPlay=viewModel::playSong,
@@ -298,8 +298,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 }
                 NavigationTab.TU -> {
                     YouScreen(viewModel, dockHeight + 12.dp,
-                        onSongs = { viewModel.selectTab(NavigationTab.CANCIONES) }, onRescan = onRescan,
-                        onArtworkChange = { libraryArtwork = it })
+                        onSongs = { viewModel.selectTab(NavigationTab.CANCIONES) }, onRescan = onRescan)
                 }
             }
             } }
@@ -326,7 +325,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .onSizeChanged { size -> dockHeight = with(density) { size.height.toDp() } }
+                .onSizeChanged { size -> dockHeight = maxOf(dockHeight, with(density) { size.height.toDp() }) }
                 .navigationBarsPadding()
         )
 

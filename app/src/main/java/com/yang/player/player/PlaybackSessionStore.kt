@@ -26,7 +26,7 @@ internal class PlaybackSessionStore(context: Context) {
             Song(j.getString("id"), j.getString("title"), j.optString("artist"), j.optString("album"), j.optLong("duration"),
                 j.getString("uri"), j.optString("art").takeIf(String::isNotBlank), j.optString("path"),
                 runCatching { AudioFormat.valueOf(j.optString("format")) }.getOrDefault(AudioFormat.UNKNOWN),
-                j.optInt("rate", 44100), j.optInt("bits", 16), j.optBoolean("hires"))
+                j.optInt("rate", 44100), j.optInt("bits", 16), j.optBoolean("hires"), albumArtist = j.optString("albumArtist"))
         }
         if (songs.isEmpty()) null else SavedPlayback(songs, prefs.getInt("index", 0).coerceIn(songs.indices),
             prefs.getLong("position", 0).coerceAtLeast(0), prefs.getInt("repeat", Player.REPEAT_MODE_OFF), prefs.getBoolean("shuffle", false))
@@ -55,7 +55,7 @@ internal class PlaybackSessionStore(context: Context) {
             val song = song(player.getMediaItemAt(i), duration = if(i == player.currentMediaItemIndex) player.duration else 0) ?: return
             array.put(JSONObject().put("id", song.id).put("title", song.title).put("artist", song.artist).put("album", song.album)
                 .put("duration", song.durationMs).put("uri", song.mediaUri).put("art", song.artworkUri.orEmpty()).put("path", song.dataPath)
-                .put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth).put("hires", song.isHiRes))
+                .put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth).put("hires", song.isHiRes).put("albumArtist", song.albumArtist))
         }
         val edit = prefs.edit()
         val json = array.toString()
@@ -81,7 +81,7 @@ internal class PlaybackSessionStore(context: Context) {
             }
             return MediaItem.Builder().setMediaId(song.id).setUri(uri)
                 .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album)
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album).setAlbumArtist(song.albumArtist)
                     .setArtworkUri(song.artworkUri?.let(Uri::parse)).setExtras(extras).build()).build()
         }
 
@@ -98,7 +98,8 @@ internal class PlaybackSessionStore(context: Context) {
                 mediaUri = uri, artworkUri = meta.artworkUri?.toString() ?: fallback?.artworkUri, dataPath = extras?.getString("yangPath") ?: fallback?.dataPath.orEmpty(),
                 format = format, sampleRateHz = extras?.getInt("sourceRate", fallback?.sampleRateHz ?: 44100) ?: fallback?.sampleRateHz ?: 44100,
                 bitDepth = extras?.getInt("sourceBits", fallback?.bitDepth ?: 16) ?: fallback?.bitDepth ?: 16,
-                isHiRes = extras?.getBoolean("yangHiRes", fallback?.isHiRes ?: false) ?: fallback?.isHiRes ?: false)
+                isHiRes = extras?.getBoolean("yangHiRes", fallback?.isHiRes ?: false) ?: fallback?.isHiRes ?: false,
+                albumArtist = meta.albumArtist?.toString() ?: fallback?.albumArtist.orEmpty())
         }
     }
 }
