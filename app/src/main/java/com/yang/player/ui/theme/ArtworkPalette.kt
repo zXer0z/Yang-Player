@@ -30,7 +30,8 @@ data class ArtworkPalette(
     val midColor: Color = Color(0xFF2E3642),
     val bottomColor: Color = Color(0xFF1A2028),
     val accentColor: Color = Color(0xFFB4BECF),
-    val ambientMesh: ImageBitmap? = null
+    val ambientMesh: ImageBitmap? = null,
+    val waveColors: List<Color> = listOf(accentColor, topColor, midColor)
 )
 
 private val artworkPalettes = android.util.LruCache<String, ArtworkPalette>(24)
@@ -157,6 +158,25 @@ private fun buildAppleMusicAmbientPalette(source: Bitmap): ArtworkPalette {
         0.18f
     }
 
+    // Reuse the original hue histogram before ambient normalization or blur.
+    val selectedHues = mutableListOf<Float>()
+    val waveColors = mutableListOf<Color>()
+    bucketWeight.indices.sortedByDescending { bucketWeight[it] }.forEach { bucket ->
+        if (waveColors.size < 3 && bucketWeight[bucket] > 0f) {
+            val hue = bucketHueSum[bucket] / bucketWeight[bucket]
+            if (selectedHues.all { previous -> val distance = abs(hue - previous); minOf(distance, 360f - distance) >= 40f }) {
+                selectedHues.add(hue)
+                waveColors.add(Color(ColorUtils.HSLToColor(floatArrayOf(hue,
+                    (bucketSatSum[bucket] / bucketWeight[bucket]).coerceIn(.35f, .85f), .62f))))
+            }
+        }
+    }
+    while (waveColors.size < 3) {
+        val lightness = floatArrayOf(.62f, .43f, .80f)[waveColors.size]
+        waveColors.add(Color(ColorUtils.HSLToColor(floatArrayOf(
+            dominantHue, if (selectedHues.isEmpty()) 0f else dominantSat, lightness))))
+    }
+
     // Pass 2: Normalize luminance and saturation across the 64x64 grid so the entire canvas
     // has rich, atmospheric Apple Music tones without ever washing out white text or turning pitch black
     for (y in 0 until gridSize) {
@@ -203,7 +223,8 @@ private fun buildAppleMusicAmbientPalette(source: Bitmap): ArtworkPalette {
         topColor = Color(topSample),
         midColor = Color(midSample),
         bottomColor = Color(botSample),
-        ambientMesh = blurredBitmap.asImageBitmap()
+        ambientMesh = blurredBitmap.asImageBitmap(),
+        waveColors = waveColors.toList()
     )
 }
 

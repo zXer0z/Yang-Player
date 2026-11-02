@@ -4,11 +4,15 @@ import android.os.SystemClock
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
-data class SpectrumFrame(val bands: FloatArray = FloatArray(24), val capturedAt: Long = 0L)
+data class SpectrumFrame(val bands: FloatArray = FloatArray(24), val capturedAt: Long = 0L, val bassPulse: Float = 0f, val detailBands: FloatArray = FloatArray(32))
 
 /** Read-only PCM tap. Two fixed windows bound work and memory; FFT never runs on the audio thread. */
 object MusicSpectrum {
@@ -28,6 +32,21 @@ object MusicSpectrum {
     private var seenGeneration = -1
     private val _frame = MutableStateFlow(SpectrumFrame())
     val frame = _frame.asStateFlow()
+
+    private val consumers = MutableStateFlow(0)
+    private val analysisScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val analysisJob = analysisScope.launch {
+        consumers.map { it > 0 }.distinctUntilChanged().collectLatest { requested ->
+            if (requested) analyse()
+        }
+    }
+
+    /** Multiple visible clients share one FFT consumer, including HiFi behind the player sheet. */
+    suspend fun observe(): Nothing {
+        consumers.update { it + 1 }
+        try { awaitCancellation() }
+        finally { consumers.update { (it - 1).coerceAtLeast(0) } }
+    }
 
     fun reset() { generation++ }
 
@@ -73,10 +92,13 @@ object MusicSpectrum {
     }
 
     /** One lifecycle-owned consumer, present only while the HiFi visual is visible and playing. */
-    suspend fun observe(): Nothing = withContext(Dispatchers.Default) {
+    private suspend fun analyse(): Nothing = withContext(Dispatchers.Default) {
         val real = DoubleArray(N)
         val imaginary = DoubleArray(N)
         val hann = DoubleArray(N) { .5 - .5 * cos(2 * PI * it / (N - 1)) }
+        var bassAverage = 0.0
+        var previousPulse = 0f
+        var previousCapture = 0L
         generation++; enabled = true
         try {
             while (true) {
@@ -125,7 +147,28 @@ object MusicSpectrum {
                             val db = 20 * log10(max(1e-9, sqrt(power) * 4 / N))
                             ((db + 72) / 72).coerceIn(0.0, 1.0).toFloat()
                         }
-                        _frame.value = SpectrumFrame(bands, window.at)
+                        val details = FloatArray(32) { band ->
+                            val lowHz = 30 * (high / 30).pow(band / 32.0)
+                            val highHz = 30 * (high / 30).pow((band + 1) / 32.0)
+                            val from = max(1, (lowHz * N / window.rate).toInt()).coerceAtMost(N / 2 - 1)
+                            val to = max(from + 1, ceil(highHz * N / window.rate).toInt()).coerceAtMost(N / 2)
+                            var power = 0.0
+                            for (bin in from until to) power = max(power, real[bin] * real[bin] + imaginary[bin] * imaginary[bin])
+                            val db = 20 * log10(max(1e-9, sqrt(power) * 4 / N))
+                            ((db + 60) / 60).coerceIn(0.0, 1.0).toFloat()
+                        }
+                        // Relative low-frequency onset, rather than a timer or a BPM guess.
+                        var bassPower = 0.0
+                        val bassEnd = ceil(220.0 * N / window.rate).toInt().coerceIn(2, N / 2)
+                        for (bin in 1 until bassEnd) bassPower += real[bin] * real[bin] + imaginary[bin] * imaginary[bin]
+                        val bass = sqrt(bassPower) * 2 / N
+                        val elapsed = if (previousCapture == 0L) .016 else ((window.at - previousCapture) / 1000.0).coerceIn(.008, .2)
+                        if (previousCapture == 0L) bassAverage = bass
+                        val onset = ((bass - bassAverage * 1.05) / (bassAverage * .65 + .003)).coerceIn(0.0, 1.0).toFloat()
+                        bassAverage += (bass - bassAverage) * (1 - exp(-elapsed / .6))
+                        previousPulse = max(onset, previousPulse * exp(-elapsed / .12).toFloat())
+                        previousCapture = window.at
+                        _frame.value = SpectrumFrame(bands, window.at, previousPulse, details)
                     } finally { spare.set(window) }
                 }
                 delay(16)

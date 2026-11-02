@@ -64,6 +64,15 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import com.yang.player.audio.YinConnector
+import com.yang.player.audio.MusicSpectrum
+import com.yang.player.ui.components.YinVinylArtwork
+import com.yang.player.ui.components.YinBeatAtmosphere
+import com.yang.player.ui.components.PlayerBarShimmer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -155,6 +164,15 @@ fun FullPlayerModal(
     var showLyrics by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
 
+    val yin by remember { YinConnector.get(context) }.state.collectAsState()
+    val yinConnected = yin.ready
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, yinConnected, isPlaying, showLyrics, showQueue) {
+        if (yinConnected && isPlaying && !showLyrics && !showQueue) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { MusicSpectrum.observe() }
+        }
+    }
+
     // Prepare stable queue and index for the pager
     val effectiveQueue = remember(queue, song) {
         if (queue.isNotEmpty()) queue else listOf(song)
@@ -237,7 +255,10 @@ fun FullPlayerModal(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            ArtworkAtmosphere(palette, moving = true)
+            ArtworkAtmosphere(palette, moving = !yinConnected)
+            if (yinConnected && !showLyrics && !showQueue) {
+                YinBeatAtmosphere(isPlaying, androidx.compose.ui.graphics.lerp(palette.topColor, palette.accentColor, .25f))
+            }
 
             if (showLyrics) {
                 LyricsPane(
@@ -312,11 +333,13 @@ fun FullPlayerModal(
                                         },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    ArtworkCard(song = pageSong)
+                                    if (yinConnected) YinVinylArtwork(pageSong, isPlaying && pageSong.id == song.id, palette.waveColors)
+                                    else ArtworkCard(song = pageSong)
                                 }
                             }
                         } else {
-                            ArtworkCard(song = song)
+                            if (yinConnected) YinVinylArtwork(song, isPlaying, palette.waveColors)
+                            else ArtworkCard(song = song)
                         }
                     },
                     controls = {
@@ -425,8 +448,10 @@ fun FullPlayerModal(
                                         .fillMaxWidth(currentFraction)
                                         .fillMaxHeight()
                                         .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = if (isSeeking) 0.98f else 0.82f))
-                                )
+                                        .background(if (yinConnected && !isSeeking) palette.accentColor.copy(alpha = .62f) else Color.White.copy(alpha = if (isSeeking) 0.98f else 0.82f))
+                                ) {
+                                    if (yinConnected && !isSeeking) PlayerBarShimmer(palette.accentColor, Modifier.fillMaxSize())
+                                }
                             }
                         }
 
@@ -605,8 +630,10 @@ fun FullPlayerModal(
                                         .fillMaxWidth(volFraction)
                                         .fillMaxHeight()
                                         .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = if (isVolDragging) 0.98f else 0.82f))
-                                )
+                                        .background(if (yinConnected && !isVolDragging) palette.accentColor.copy(alpha = .62f) else Color.White.copy(alpha = if (isVolDragging) 0.98f else 0.82f))
+                                ) {
+                                    if (yinConnected && !isVolDragging) PlayerBarShimmer(palette.accentColor, Modifier.fillMaxSize())
+                                }
                             }
                         }
 

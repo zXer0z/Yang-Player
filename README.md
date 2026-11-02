@@ -36,7 +36,7 @@ Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen
 - EQ de diez bandas con frecuencia, ganancia y Q; preamplificador, margen automático y limitador.
 - AudioTrack, AAudio y OpenSL ES; Yang Hi-Res solicita AAudio exclusivo y negocia una alternativa compatible si no está disponible.
 - Formato PCM, frecuencia y búfer por perfil; telemetría que distingue el formato solicitado del flujo abierto.
-- Si Yin administra la reproducción, Yang muestra su estado y ofrece acceso a sus controles.
+- Si Yin está conectado, el player muestra un vinilo con carátula circular giratoria, centro yin-yang y un espectro reactivo alrededor. Las barras de volumen y progreso tienen un brillo de izquierda a derecha. HiFi muestra la conexión y ofrece acceso a sus controles.
 
 El formato abierto no demuestra el formato interno del DAC ni el códec Bluetooth. No se anuncia bit-perfect. La onda de cabecera es una animación de reproducción, no un analizador de señal.
 

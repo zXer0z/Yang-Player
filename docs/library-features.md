@@ -42,3 +42,17 @@ Mientras la pantalla permanece visible y la canción reproduce, un visual de ond
 Representa el contenido de la canción antes de los efectos y no mide el DAC ni la salida procesada por Yin. Puede adelantarse ligeramente al sonido por el búfer de reproducción. La onda pequeña de la pantalla del motor local continúa siendo decorativa.
 
 La tarjeta de canción en HiFi muestra solo frecuencia y formato de la salida de Yin; los diagnósticos PCM DIRECT/HAL/ALSA se consultan en Yin. El brillo del estado se anima en un componente de texto independiente, y se elimina cuando la conexión deja de estar lista.
+
+## Player vinilo con Yin
+
+Cuando el protocolo confirma que Yin está listo, el player sustituye la carátula cuadrada por un disco circular giratorio, con surcos y un centro vectorial yin-yang de aro metálico y orificio. Al pausar conserva su ángulo y reanuda desde ahí. El paginador y sus gestos para cambiar de canción se conservan. Solo la página actual anima el disco y recibe espectro; las vecinas permanecen estáticas. Al desconectar Yin vuelve la carátula rectangular.
+
+Tres cintas de ondas anchas, redondeadas y desfasadas rodean el disco. Se extraen hasta tres familias de tono representativas de la carátula antes del desenfoque ambiental, evitando tonos casi iguales. Las carátulas de un solo tono usan variaciones de ese tono y las neutras usan grises. No hay una capa azul fija. La energía de 32 bandas y los ataques de graves controlan su expansión; una deriva lenta de fase da continuidad al movimiento de las capas. Es un visual reactivo del PCM anterior a los efectos de Yin, no una medición del DAC.
+
+El fondo del player aumenta suavemente su color con los ataques de graves medidos hasta 220 Hz, relativos al nivel reciente de la canción, y decae después de cada golpe. Las barras de volumen y progreso conservan sus gestos y muestran un brillo de izquierda a derecha en sus porciones activas; se suspende al arrastrar cada barra.
+
+HiFi y el player comparten un único consumidor FFT mediante solicitudes de observación para evitar análisis duplicados al abrir el modal sobre HiFi. La actividad en segundo plano suspende el análisis y el dibujo animado. En Android 10 o superior, mallas trianguladas preasignadas evitan teselar curvas rellenas y contornos gruesos a cada fotograma. Android 8/9 conserva un dibujo compatible. El gradiente del fondo reactivo se mantiene y su capa cambia de opacidad al pulso.
+
+Diagnóstico en el LG V60: la muestra inicial del player registró mediana de 23 ms y aproximadamente 55 % de fotogramas fuera de plazo. Tras las mallas, la primera muestra bajó a aproximadamente 17 %. La versión final elimina también la deriva del fondo base mientras Yin está conectado y cierra las fases sin salto al completar la vuelta. En una muestra final de unos 10,2 segundos reproduciendo Melody se renderizaron 614 fotogramas, con 2 fuera de plazo (0,33 %) y mediana de 14 ms: aproximadamente 60 FPS durante esa muestra. Son mediciones de uso real, no una garantía de tasa constante ni un benchmark controlado. No se ejecutaron pruebas automatizadas; el usuario realiza la validación funcional de escucha y gestos.
+
+Referencia técnica: https://developer.android.com/topic/performance/hardware-accel.
