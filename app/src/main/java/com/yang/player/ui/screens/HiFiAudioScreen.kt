@@ -76,7 +76,8 @@ fun HiFiAudioScreen(playerState: PlayerState, bottomContentPadding: Dp) {
             SoundCard {
                 Text(playerState.currentSong?.title ?: "Elige una canción", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                 playerState.currentSong?.let { Text(it.audioQualityBadge, color = Color.White.copy(alpha = .55f), fontSize = 13.sp) }
-                if (yin.output.isNotBlank()) Text(yin.output, color = Color.White.copy(alpha = .7f), fontSize = 14.sp)
+                val outputFormat = yin.output.lineSequence().firstOrNull().orEmpty()
+                if (outputFormat.isNotBlank()) Text(outputFormat, color = Color.White.copy(alpha = .7f), fontSize = 14.sp)
                 if (!yin.ready) Text(yin.message.ifBlank { "El audio espera a que Yin esté listo." }, color = accent, fontSize = 13.sp)
             }
             SoundCard {

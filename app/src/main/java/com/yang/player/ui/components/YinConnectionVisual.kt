@@ -1,6 +1,10 @@
 package com.yang.player.ui.components
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.Canvas
@@ -12,10 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.scale
@@ -26,6 +27,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -165,28 +168,37 @@ fun YinConnectionVisual(ready: Boolean, playing: Boolean, color: Color) {
                 translationY = (1f - stage(progress, .38f, .49f)) * 6.dp.toPx()
             })
         }
-        Text(if (!ready) "Esperando a Yin" else "Yin conectado",
-            color = if (ready) color else Color.White.copy(alpha = .6f), fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen
-                val reveal = if (ready) stage(intro.value, .43f, .55f) else 1f
-                alpha = reveal
-                translationY = (1f - reveal) * 8.dp.toPx()
-                scaleX = .96f + reveal * .04f
-                scaleY = scaleX
-            }.drawWithContent {
-                drawContent()
-                val progress = intro.value
-                if (ready && progress > .54f && progress < .84f) {
-                    val shine = ((progress - .54f) / .30f).coerceIn(0f, 1f)
-                    val x = -size.width * .4f + shine * size.width * 1.8f
-                    drawRect(Brush.linearGradient(
-                        listOf(Color.Transparent, Color.White.copy(alpha = .9f), Color.Transparent),
-                        start = Offset(x - size.width * .22f, 0f), end = Offset(x + size.width * .22f, size.height)
-                    ), blendMode = BlendMode.SrcAtop)
-                }
-            })
+        YinConnectionLabel(ready, color, Modifier.graphicsLayer {
+            val reveal = if (ready) stage(intro.value, .43f, .55f) else 1f
+            alpha = reveal
+            translationY = (1f - reveal) * 8.dp.toPx()
+            scaleX = .96f + reveal * .04f
+            scaleY = scaleX
+        })
         Text(if (!ready) "Reconectando el motor de sonido" else if (!settled) "Dos mitades, un sonido" else if (playing) "Frecuencias de la canción · antes de los efectos" else "Listo para reproducir",
             color = Color.White.copy(alpha = .45f), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
     }
+}
+
+/** Only the label recomposes for the brush; the spectrum and HiFi controls stay independent. */
+@Composable
+private fun YinConnectionLabel(ready: Boolean, color: Color, modifier: Modifier = Modifier) {
+    if (!ready) {
+        Text("Esperando a Yin", color = Color.White.copy(alpha = .6f), fontSize = 19.sp,
+            fontWeight = FontWeight.SemiBold, modifier = modifier)
+        return
+    }
+    val sweep by rememberInfiniteTransition(label = "yinConnectedShimmer").animateFloat(
+        initialValue = -.35f, targetValue = 1.35f,
+        animationSpec = infiniteRepeatable(tween(2100, easing = LinearEasing), RepeatMode.Restart),
+        label = "yinConnectedHighlight"
+    )
+    var width by remember { mutableFloatStateOf(1f) }
+    val x = sweep * width
+    val brush = Brush.linearGradient(
+        colors = listOf(color.copy(alpha = .62f), Color.White, color.copy(alpha = .62f)),
+        start = Offset(x - width * .23f, 0f), end = Offset(x + width * .23f, 0f)
+    )
+    Text("Yin conectado", style = TextStyle(brush = brush, fontSize = 19.sp, fontWeight = FontWeight.SemiBold),
+        modifier = modifier.onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) })
 }
