@@ -32,3 +32,11 @@ La biblioteca comparte un índice para listados, detalles y colas. Las colaborac
 Los álbumes usan el título y la etiqueta de artista del álbum; si falta esta última, se usa el artista principal reconocido. Así Bylaw - EP reúne sus cinco canciones bajo Martin Garrix sin mezclar discos del mismo nombre de otros artistas. MediaStore aporta la etiqueta en Android 11 o superior; las carpetas SAF la leen del audio y actualizan la caché anterior. Se conserva también en playlists y sesiones.
 
 Las flechas de volver quedan fuera de las listas, visibles al desplazar. Abrir un álbum o artista utiliza una única ruta de detalle y conserva la posición de la lista al volver. El margen inferior reserva el espacio del dock expandido para evitar cambios de geometría durante su animación. La agrupación del listado se calcula fuera del hilo de interfaz y solo al cambiar la biblioteca.
+
+## Conexión visual con Yin
+
+HiFi reconoce la conexión confirmada por el protocolo, incluso antes de abrir una canción. Una introducción de 1,25 segundos une las dos mitades de Yin y Yang y da paso a Yin conectado. El estado de espera o desconexión conserva su mensaje propio.
+
+Mientras la pantalla permanece visible y la canción reproduce, un visual de ondas usa 24 bandas logarítmicas del PCM decodificado (30 Hz a 20 kHz, limitado por Nyquist). FFT de 4096 muestras con ventana Hann fuera del hilo de audio, máximo 25 análisis por segundo y suavizado al dibujar. Dos ventanas preasignadas limitan memoria y trabajo: si están ocupadas, se descartan datos visuales. La lectura usa índices absolutos y solo bytes consumidos; no modifica PCM ni buffers ni requiere micrófono. Se suspende al pausar, salir de HiFi o pasar la actividad al fondo.
+
+Representa el contenido de la canción antes de los efectos y no mide el DAC ni la salida procesada por Yin. Puede adelantarse ligeramente al sonido por el búfer de reproducción. La onda pequeña de la pantalla del motor local continúa siendo decorativa.

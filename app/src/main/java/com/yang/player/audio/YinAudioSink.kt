@@ -25,6 +25,7 @@ class YinAudioSink private constructor(context: Context, private val local: Yang
     private var bufferStart = 0
     override fun setListener(listener: AudioSink.Listener) { this.listener = listener; local.setListener(listener) }
     override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
+        MusicSpectrum.reset()
         if (format != inputFormat || ended) closeRemote()
         format = inputFormat; ended = false
         local.configure(inputFormat, specifiedBufferSize, outputChannels); localConfigured = true
@@ -61,12 +62,20 @@ class YinAudioSink private constructor(context: Context, private val local: Yang
         }
         val remote = channel
         if (remote != null) {
-            return try { remote.write(buffer) } catch (error: Exception) { failed(error); false }
+            return try {
+                val start = buffer.position()
+                val consumed = remote.write(buffer)
+                MusicSpectrum.offer(buffer, start, buffer.position(), input.sampleRate, input.channelCount, input.pcmEncoding)
+                consumed
+            } catch (error: Exception) { failed(error); false }
         }
         if (connector.mustWaitForYin()) return false
         if (!localConfigured) { local.configure(input, 0, null); localConfigured = true }
         if (playing) local.play()
-        return local.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        val start = buffer.position()
+        val consumed = local.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        MusicSpectrum.offer(buffer, start, buffer.position(), input.sampleRate, input.channelCount, input.pcmEncoding)
+        return consumed
     }
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
         val remote = channel ?: return local.getCurrentPositionUs(sourceEnded)
@@ -96,8 +105,8 @@ class YinAudioSink private constructor(context: Context, private val local: Yang
         this.volume = volume; local.setVolume(volume)
         channel?.let { try { it.state(playing, volume) } catch (error: Exception) { failed(error) } }
     }
-    override fun handleDiscontinuity() { local.handleDiscontinuity(); listener?.onPositionDiscontinuity() }
-    override fun flush() { closeRemote(); local.flush(); ended = false }
-    override fun reset() { closeRemote(); local.reset(); format = null; localConfigured = false; ended = false; currentBuffer = null; bufferTimestamp = C.TIME_UNSET }
+    override fun handleDiscontinuity() { MusicSpectrum.reset(); local.handleDiscontinuity(); listener?.onPositionDiscontinuity() }
+    override fun flush() { MusicSpectrum.reset(); closeRemote(); local.flush(); ended = false }
+    override fun reset() { MusicSpectrum.reset(); closeRemote(); local.reset(); format = null; localConfigured = false; ended = false; currentBuffer = null; bufferTimestamp = C.TIME_UNSET }
     override fun release() { reset(); local.release() }
 }

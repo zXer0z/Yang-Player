@@ -68,13 +68,12 @@ fun HiFiAudioScreen(playerState: PlayerState, bottomContentPadding: Dp) {
     var advancedEq by remember { mutableStateOf(false) }
     var section by rememberSaveable { mutableIntStateOf(0) }
     fun save(value: EngineProfile = draft) { draft = value.valid(); engine.save(draft) }
-    if (yin.active) {
+    if (yin.active || yin.ready) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = bottomContentPadding + 16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("Hi-Fi", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            Text("Motor y salida", color = Color.White.copy(alpha = .5f), fontSize = 14.sp)
+            com.yang.player.ui.components.YinConnectionVisual(yin.ready, playerState.isPlaying, accent)
             SoundCard {
-                Text(if (yin.ready) "Yin · conectado" else "Yin · esperando conexión", color = accent, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Text(playerState.currentSong?.title ?: "Elige una canción", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                 playerState.currentSong?.let { Text(it.audioQualityBadge, color = Color.White.copy(alpha = .55f), fontSize = 13.sp) }
                 if (yin.output.isNotBlank()) Text(yin.output, color = Color.White.copy(alpha = .7f), fontSize = 14.sp)
