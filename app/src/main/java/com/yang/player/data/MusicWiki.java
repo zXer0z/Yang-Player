@@ -14,7 +14,7 @@ import org.json.*;
 public final class MusicWiki {
     public static final class Entry {
         public final String text,full,url,language;
-        Entry(JSONObject json){full=excerpt(json.optString("full"),3,650);text=brief(full.isEmpty()?json.optString("text"):full);url=json.optString("url");language=json.optString("language");}
+        Entry(JSONObject json){full=excerpt(json.optString("full",json.optString("text")),1,440);text=brief(full.isEmpty()?json.optString("text"):full);url=json.optString("url");language=json.optString("language");}
     }
     private static final Handler main=new Handler(Looper.getMainLooper());
     private static final ThreadPoolExecutor worker=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(8),r->new Thread(r,"MusicWiki"));
