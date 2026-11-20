@@ -2,16 +2,16 @@
 <h1 align="center">Yang Player</h1>
 <p align="center">Tu biblioteca, tus portadas y tu sonido.</p>
 <p align="center"><b>Android 8.0+ · Kotlin · Jetpack Compose · Media3 · Motor nativo en C</b></p>
-<p align="center"><a href="https://github.com/zXer0z/Yin-Control">Conoce Yin Control</a> · <a href="#compilar">Compilar</a> · <a href="docs/audio-engine.md">Motor de audio</a></p>
+<p align="center"><a href="https://zxer0z.github.io/Yang-Player/">Web de Yang</a> · <a href="https://github.com/zXer0z/Yang-Player/releases/latest">Descargar APK</a> · <a href="#compilar">Compilar</a></p>
 
-Yang es un reproductor Android para escuchar y organizar música local, con una interfaz que toma sus colores de la carátula. Y puede delegar el audio en **[Yin Control](https://github.com/zXer0z/Yin-Control)** cuando ese motor está disponible y autorizado.
+Yang reproduce tu biblioteca local y la música de tu propio servidor Navidrome. La interfaz toma sus colores de la carátula y el motor local permite ajustar el sonido para cada salida sin root. En dispositivos compatibles, **[Yin Control](https://github.com/zXer0z/Yin-Control)** puede encargarse de la salida de audio por el puente autenticado.
 
 ## Así se ve
 
 Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen canciones en este repositorio.
 
-<table><tr><th>Inicio</th><th>Reproductor</th><th>HiFi</th></tr>
-<tr><td><img src="docs/screenshots/home.png" width="240" alt="Inicio de Yang"></td><td><img src="docs/screenshots/player.png" width="240" alt="Reproductor de Yang"></td><td><img src="docs/screenshots/hifi.png" width="240" alt="Perfiles de HiFi"></td></tr></table>
+<table><tr><th>Canciones</th><th>Reproductor</th><th>Hi-Fi</th></tr>
+<tr><td><img src="docs/screenshots/songs.webp" width="240" alt="Canciones con botones de orden y filtros"></td><td><img src="docs/screenshots/player.png" width="240" alt="Reproductor de Yang"></td><td><img src="docs/screenshots/hifi.png" width="240" alt="Perfiles de Hi-Fi"></td></tr></table>
 
 <details><summary>Menú de reproducción</summary>
 <p><img src="docs/screenshots/playback-options.png" width="320" alt="Aleatorio, repetición y temporizador dentro del menú"></p>
@@ -20,6 +20,8 @@ Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen
 ## Qué puedes hacer
 
 - Explorar canciones, álbumes, artistas, carpetas, favoritos y playlists locales.
+- Ordenar y filtrar Canciones desde dos controles independientes. Con Navidrome, también puedes ver solo las descargadas y elegir la calidad de reproducción.
+- Personalizar el tema, el acento y el estilo de la carátula en el reproductor.
 - Cambiar de canción deslizando la portada, ordenar la cola y recuperar la última sesión sin iniciar audio automáticamente.
 - Leer letras integradas o importadas; buscar letras sincronizadas en LRCLIB.
 - Completar datos o carátulas faltantes con una coincidencia revisada. Los complementos se guardan en Yang y conservan los archivos originales.
@@ -31,14 +33,23 @@ Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen
 
 ## Tu sonido
 
-**Sonido, Salida y Detalles** agrupan los controles de HiFi. El carrusel selecciona el perfil de Altavoz, Bluetooth, Jack/AUX o USB que quieres editar, indicando cuál es la conexión activa.
+Los controles de Hi-Fi permiten editar perfiles para altavoz, Bluetooth, Jack/AUX o USB y muestran qué salida está activa.
 
 - EQ de diez bandas con frecuencia, ganancia y Q; preamplificador, margen automático y limitador.
 - AudioTrack, AAudio y OpenSL ES; Yang Hi-Res solicita AAudio exclusivo y negocia una alternativa compatible si no está disponible.
 - Formato PCM, frecuencia y búfer por perfil; telemetría que distingue el formato solicitado del flujo abierto.
-- Si Yin está conectado, el player muestra un vinilo con carátula circular giratoria, centro yin-yang y un espectro reactivo alrededor. Las barras de volumen y progreso tienen un brillo de izquierda a derecha. HiFi muestra la conexión y ofrece acceso a sus controles.
+- El monitor muestra espectro, pico y RMS del PCM de entrada. El factor de cresta es la diferencia entre pico y RMS medidos en el mismo bloque de 400 ms.
+- Con Yin conectado, el estilo vinilo puede mostrar un espectro alrededor de la carátula. Las barras de volumen y progreso tienen un brillo animado, y Hi-Fi muestra el acceso a los controles de Yin.
 
-El formato abierto no demuestra el formato interno del DAC ni el códec Bluetooth. No se anuncia bit-perfect. La onda de cabecera es una animación de reproducción, no un analizador de señal.
+La telemetría describe el flujo abierto por la aplicación. La resolución física del DAC y el códec Bluetooth dependen del dispositivo.
+
+## Navidrome
+
+1. Abre **Tú → Conexión a servidor** y guarda la URL HTTPS de tu servidor Navidrome con tu usuario y contraseña.
+2. Activa **Usar biblioteca del servidor**.
+3. En **Canciones**, desliza hacia abajo desde arriba de la lista para consultar el catálogo actualizado.
+
+La URL se configura en el dispositivo. Desde **Filtros y opciones → Calidad de reproducción** puedes elegir el archivo original o un perfil con bitrate reducido.
 
 ## Compilar
 
@@ -72,7 +83,19 @@ La configuración pública firma los builds de desarrollo con el keystore están
 
 [Motor de audio](docs/audio-engine.md) · [Puente con Yin](docs/yin-bridge.md) · [Metadatos y letras](docs/metadata-completion.md) · [Funciones de reproducción](docs/library-features.md).
 
-El historial de escucha se guarda en el dispositivo. Las funciones online consultan sus proveedores correspondientes; no se suben archivos de música para buscar metadatos. Las capacidades de decodificación dependen de los códecs disponibles: este motor local no incluye una extensión FFmpeg de Media3.
+El historial de escucha se guarda en el dispositivo. Las funciones online consultan sus proveedores correspondientes para el catálogo, las letras y los metadatos. Media3 usa los decodificadores de Android y puede recurrir a la [extensión FFmpeg de Jellyfin](https://github.com/jellyfin/jellyfin-androidx-media).
+
+## Web del proyecto
+
+La web está en `website/` y GitHub Pages la actualiza desde `main`. Para abrir una copia local con Node.js 22.12 o posterior:
+
+```sh
+cd website
+npm ci
+npm run dev
+```
+
+`npm run build` genera el sitio estático en `website/dist/`.
 
 ## Estado del proyecto
 
