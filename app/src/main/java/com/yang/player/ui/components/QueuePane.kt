@@ -30,12 +30,16 @@ import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -52,6 +56,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -153,6 +158,38 @@ fun QueuePane(
                 Text("${rows.size} canciones · Mantén y arrastra el asa", color = Color.White.copy(alpha = 0.50f), fontSize = 11.sp)
             }
         }
+        val context = LocalContext.current
+        val appearancePrefs = remember { com.yang.player.data.AppearancePreferences.get(context) }
+        val appearanceConfig by appearancePrefs.config.collectAsState()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 2.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.045f))
+                .clickable { appearancePrefs.setRoonRadioEnabled(!appearanceConfig.roonRadioEnabled) }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Rounded.Radio,
+                null,
+                tint = if (appearanceConfig.roonRadioEnabled) accent else Color.White.copy(alpha = 0.4f),
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Roon Radio · Continuidad", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                Text("Sigue reproduciendo música al terminar la cola", color = Color.White.copy(alpha = 0.42f), fontSize = 11.sp)
+            }
+            Switch(
+                checked = appearanceConfig.roonRadioEnabled,
+                onCheckedChange = { appearancePrefs.setRoonRadioEnabled(it) },
+                colors = SwitchDefaults.colors(checkedTrackColor = accent, checkedThumbColor = Color(0xFF121317))
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         if (rows.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("No hay canciones en la cola", color = Color.White.copy(alpha = 0.65f))

@@ -76,8 +76,8 @@ class YinConnector private constructor(private val context: Context) {
         main.removeCallbacks(reconnect); main.postDelayed(reconnect, 1500)
     }
     fun canOpen() = _state.value.ready && SystemClock.elapsedRealtime() >= retryAfter && remote?.isBinderAlive == true
-    /** Only an explicitly disabled Yin may release its protected output to Yang. */
-    fun mustWaitForYin() = (protectedSession || _state.value.installed) && _state.value.enabled != false
+    /** Protect audio already handed to Yin while allowing local playback during initial discovery. */
+    fun mustWaitForYin() = protectedSession && _state.value.enabled != false
     private fun acceptHello(result: Bundle) {
         val enabled = if (result.containsKey("enabled")) result.getBoolean("enabled") else if (result.getBoolean("ready")) true else _state.value.enabled
         if (enabled == false) { protectedSession = false; retryAfter = 0 }

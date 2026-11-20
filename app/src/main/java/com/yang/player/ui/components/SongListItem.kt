@@ -25,8 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,14 +55,17 @@ fun SongListItem(
     isPlaybackActive: Boolean = false
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val accent = LocalArtworkAccent.current
     val isHighlighted = isPlayingThisSong && highlightCurrentSong
 
-    val imageRequest = remember(song.artworkUri) {
+    val imageRequest = remember(song.id, song.artworkUri, song.mediaUri) {
         ImageRequest.Builder(context)
-            .data(song.artworkUri)
+            .data(song.artworkUri ?: song.mediaUri)
             .size(150, 150)
             .precision(Precision.INEXACT)
+            .memoryCacheKey("artwork_thumb_${song.id}_${song.artworkUri ?: song.mediaUri}")
+            .diskCacheKey("artwork_thumb_${song.id}_${song.artworkUri ?: song.mediaUri}")
             .crossfade(false) // Zero alpha animation overhead during fling
             .build()
     }
@@ -68,7 +73,10 @@ fun SongListItem(
     // The current track is marked locally, without a competing row container.
     val rowModifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 6.dp)
 
     Row(

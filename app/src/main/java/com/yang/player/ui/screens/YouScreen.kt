@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -14,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -41,6 +44,7 @@ import com.yang.player.ui.viewmodel.PlayerViewModel
 @Composable
 fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () -> Unit, onRescan: () -> Unit) {
     val account by viewModel.online.account.collectAsState()
+    val cloudMode by viewModel.cloudMode.collectAsState()
     val songs by viewModel.allSongs.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val collections by viewModel.collections.collectAsState()
@@ -84,6 +88,15 @@ fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () 
         }
         return
     }
+    if (page == "appearance") {
+        AppearanceScreen(bottomContentPadding = bottomContentPadding, onBack = { back() })
+        return
+    }
+
+    if (page == "server_library") {
+        ServerLibraryScreen(viewModel, bottomContentPadding) { back() }
+        return
+    }
     Column(Modifier.fillMaxSize()) {
         if (page.isNotBlank()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -116,17 +129,47 @@ fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () 
                     }
                     YouSection("Tu biblioteca")
                     Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.035f))) {
-                        YouAction(Icons.Rounded.Album, "Álbumes", "Explora tus discos") { page = "albums" }
-                        YouAction(Icons.Rounded.Mic, "Artistas", "${artists.size} artistas en tu biblioteca") { page = "artists" }
-                        YouAction(Icons.Rounded.QueueMusic, "Playlists", "Crea y organiza tus listas") { page = "playlists" }
-                        YouAction(Icons.Rounded.FavoriteBorder, "Favoritos", "Las canciones que guardaste") { page = "favorites" }
-                        YouAction(Icons.Rounded.BarChart, "Estadísticas", "Tu tiempo de escucha, canciones y artistas") { page = "statistics" }
+                        YouAction(Icons.Rounded.Album, "Álbumes", "${albums.size} álbumes") { page = "albums" }
+                        YouAction(Icons.Rounded.Mic, "Artistas", "${artists.size} artistas") { page = "artists" }
+                        YouAction(Icons.AutoMirrored.Rounded.QueueMusic, "Playlists", "Tus listas y colecciones") { page = "playlists" }
+                        YouAction(Icons.Rounded.FavoriteBorder, "Favoritos", "${favorites.size} canciones") { page = "favorites" }
+                        YouAction(Icons.Rounded.BarChart, "Estadísticas", "Tiempo y hábitos de escucha") { page = "statistics" }
+                    }
+                    YouSection("Ajustes")
+                    Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.035f))) {
+                        YouActionRow(
+                            icon = Icons.Rounded.Cloud,
+                            title = "Usar biblioteca del servidor",
+                            subtitle = "Escucha tu música desde Navidrome",
+                            modifier = Modifier.toggleable(
+                                value = cloudMode,
+                                role = Role.Switch,
+                                onValueChange = viewModel::setCloudMode
+                            )
+                        ) {
+                            Switch(
+                                checked = cloudMode,
+                                onCheckedChange = null,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = accent.copy(alpha = 0.85f),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.10f),
+                                    uncheckedBorderColor = Color.White.copy(alpha = 0.18f)
+                                )
+                            )
+                        }
+                        YouAction(Icons.Rounded.Storage, "Conexión a servidor", "Usa tu propio servidor con Navidrome") { page = "server_library" }
+                    }
+                    YouSection("Personalización")
+                    Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.035f))) {
+                        YouAction(Icons.Rounded.Palette, "Tema y Apariencia", "Estilos de carátula, tema y acentos") { page = "appearance" }
                     }
                     YouSection("Archivos y biblioteca")
                     Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.035f))) {
-                        YouAction(Icons.Rounded.Refresh, if (scanning) "Buscando música…" else "Reescanear biblioteca", "Actualiza las canciones del teléfono", enabled = !scanning, onClick = onRescan)
-                        YouAction(Icons.Rounded.CreateNewFolder, "Agregar carpeta", "Incluye su música y subcarpetas", enabled = !scanning) { folderPicker.launch(null) }
-                        YouAction(Icons.Rounded.AudioFile, "Abrir un audio", "Elige un archivo para reproducir") { audioPicker.launch(arrayOf("audio/*", "application/ogg", "application/x-flac")) }
+                        YouAction(Icons.Rounded.Refresh, if (scanning) "Buscando música…" else "Reescanear biblioteca", "Actualiza pistas locales", enabled = !scanning, onClick = onRescan)
+                        YouAction(Icons.Rounded.CreateNewFolder, "Agregar carpeta", "Incluye audios de una carpeta", enabled = !scanning) { folderPicker.launch(null) }
+                        YouAction(Icons.Rounded.AudioFile, "Abrir audio", "Reproduce un archivo específico") { audioPicker.launch(arrayOf("audio/*", "application/ogg", "application/x-flac")) }
                     }
                     if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 16.dp), color = accent, trackColor = Color.White.copy(alpha = 0.06f))
                     message?.let { Text(it, color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp)) }
@@ -156,7 +199,16 @@ fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () 
                     if (artists.isEmpty()) item { EmptyLibrary("Agrega música para explorar tus artistas.") }
                     items(artists, key = { it.id }) { artist ->
                         val artistSongs = artist.songs
-                        LibraryCollection(artist.name, "${artistSongs.size} ${if (artistSongs.size == 1) "canción" else "canciones"}", artistSongs.firstOrNull { it.artworkUri != null }?.artworkUri, Icons.Rounded.Mic) { viewModel.openArtist(artist.name) }
+                        val fallbackArt = artistSongs.firstOrNull { it.artworkUri != null }?.artworkUri
+                        val artistPhoto = com.yang.player.data.rememberArtistPhoto(artist.name)
+                        val finalArtwork = artistPhoto ?: fallbackArt
+                        LibraryCollection(
+                            title = artist.name,
+                            subtitle = "${artistSongs.size} ${if (artistSongs.size == 1) "canción" else "canciones"}",
+                            artwork = finalArtwork,
+                            fallback = Icons.Rounded.Person,
+                            isCircular = true
+                        ) { viewModel.openArtist(artist.name) }
                     }
                 }
             }
@@ -176,20 +228,35 @@ fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () 
     Text(title, color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 32.dp, bottom = 14.dp, start = 4.dp))
 }
 @Composable private fun YouAction(icon: ImageVector, title: String, subtitle: String, enabled: Boolean = true, onClick: () -> Unit) {
+    YouActionRow(icon, title, subtitle, Modifier.clickable(enabled = enabled, onClick = onClick), enabled) {
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Color.White.copy(alpha = 0.25f), modifier = Modifier.size(19.dp))
+    }
+}
+
+@Composable
+private fun YouActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    modifier: Modifier,
+    enabled: Boolean = true,
+    trailing: @Composable () -> Unit
+) {
     val accent = LocalArtworkAccent.current
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().then(modifier).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = accent.copy(alpha = if (enabled) 0.85f else 0.3f), modifier = Modifier.size(23.dp))
         Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
             Text(title, color = Color.White.copy(alpha = if (enabled) 0.95f else 0.4f), fontSize = 15.sp, fontWeight = FontWeight.Medium)
             Text(subtitle, color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         }
-        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Color.White.copy(alpha = 0.25f), modifier = Modifier.size(19.dp))
+        trailing()
     }
 }
-@Composable private fun LibraryCollection(title: String, subtitle: String, artwork: String?, fallback: ImageVector, onClick: () -> Unit) {
+@Composable private fun LibraryCollection(title: String, subtitle: String, artwork: String?, fallback: ImageVector, isCircular: Boolean = false, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(64.dp).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.05f)), contentAlignment = Alignment.Center) {
-            Icon(fallback, null, tint = LocalArtworkAccent.current.copy(alpha = 0.5f))
+        val shape = if (isCircular) CircleShape else RoundedCornerShape(14.dp)
+        Box(Modifier.size(64.dp).clip(shape).background(Color.White.copy(alpha = 0.05f)), contentAlignment = Alignment.Center) {
+            Icon(fallback, null, tint = LocalArtworkAccent.current.copy(alpha = 0.5f), modifier = if (isCircular) Modifier.size(28.dp) else Modifier)
             if (artwork != null) AsyncImage(artwork, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         }
         Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {

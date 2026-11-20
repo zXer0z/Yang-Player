@@ -15,6 +15,8 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import com.yang.player.data.ServerLibrary
+import java.io.IOException
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -45,10 +47,20 @@ object OnlinePlayback {
         return DataSource.Factory {
             object : DataSource {
                 private var source: DataSource? = null
+                private var libraryUri: Uri? = null
                 private val listeners = mutableListOf<TransferListener>()
                 override fun addTransferListener(listener: TransferListener) { listeners.add(listener); source?.addTransferListener(listener) }
                 override fun open(spec: DataSpec): Long {
                     val online = OnlineAudio.isOnline(spec.uri)
+                    if (spec.uri.scheme == ServerLibrary.SCHEME) {
+                        val ds = DefaultHttpDataSource.Factory()
+                            .setConnectTimeoutMs(6_000).setReadTimeoutMs(15_000).createDataSource()
+                        listeners.forEach(ds::addTransferListener)
+                        source = ds
+                        libraryUri = spec.uri
+                        return ds.open(spec.withUri(ServerLibrary.stream(app, spec.uri)))
+                    }
+
                     fun create() = (if (online) onlineFactory(app) else DefaultDataSource.Factory(app)).createDataSource().also { ds ->
                         listeners.forEach(ds::addTransferListener)
                         source = ds
@@ -61,9 +73,9 @@ object OnlinePlayback {
                     }
                 }
                 override fun read(buffer: ByteArray, offset: Int, length: Int): Int = checkNotNull(source).read(buffer, offset, length)
-                override fun getUri(): Uri? = source?.uri
+                override fun getUri(): Uri? = libraryUri ?: source?.uri
                 override fun getResponseHeaders(): Map<String, List<String>> = source?.responseHeaders.orEmpty()
-                override fun close() { source?.close(); source = null }
+                override fun close() { source?.close(); source = null; libraryUri = null }
             }
         }
     }

@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,11 +82,13 @@ fun PlayerDock(
                 DockButton(Icons.Outlined.Home, "Mostrar menú completo", onHome, backdropLayer, backdropOrigin)
                 }
                 }
-                FloatingMiniPlayer(
-                    currentSong, isPlaying, onOpenPlayer, onPlayPause, onNext,
-                    backdropLayer, backdropOrigin, compact = compact,
-                    modifier = Modifier.weight(1f), outerPadding = false
-                )
+                key(currentSong?.id) {
+                    FloatingMiniPlayer(
+                        currentSong, isPlaying, onOpenPlayer, onPlayPause, onNext,
+                        backdropLayer, backdropOrigin, compact = compact,
+                        modifier = Modifier.weight(1f), outerPadding = false
+                    )
+                }
                 AnimatedVisibility(
                     visible = compact,
                     enter = fadeIn(tween(400, delayMillis = 100)) + expandHorizontally(tween(550)),

@@ -72,10 +72,7 @@ class YinAudioSink private constructor(context: Context, private val local: Yang
         if (connector.mustWaitForYin()) return false
         if (!localConfigured) { local.configure(input, 0, null); localConfigured = true }
         if (playing) local.play()
-        val start = buffer.position()
-        val consumed = local.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
-        MusicSpectrum.offer(buffer, start, buffer.position(), input.sampleRate, input.channelCount, input.pcmEncoding)
-        return consumed
+        return local.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
     }
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
         val remote = channel ?: return local.getCurrentPositionUs(sourceEnded)

@@ -101,10 +101,14 @@ class MusicPlayerController(private val context: Context) {
     /** Hydrate the existing session immediately; events are not replayed on bind. */
     private fun synchronize(controller: MediaController) {
         val previous = _playerState.value
-        val known = previous.queue.associateBy { it.id }
-        val queue = if (controller.mediaItemCount == 0) previous.queue else (0 until controller.mediaItemCount).mapNotNull { i ->
-            val item = controller.getMediaItemAt(i)
-            PlaybackSessionStore.song(item, known[item.mediaId], if (i == controller.currentMediaItemIndex) controller.duration else 0)?.let(completion::apply)
+        val queue = if (controller.mediaItemCount == 0 || (controller.mediaItemCount == previous.queue.size && previous.queue.isNotEmpty())) {
+            previous.queue
+        } else {
+            val known = previous.queue.associateBy { it.id }
+            (0 until controller.mediaItemCount).mapNotNull { i ->
+                val item = controller.getMediaItemAt(i)
+                PlaybackSessionStore.song(item, known[item.mediaId], if (i == controller.currentMediaItemIndex) controller.duration else 0)?.let(completion::apply)
+            }
         }
         val item = controller.currentMediaItem
         val index = controller.currentMediaItemIndex.takeIf { it in queue.indices && queue[it].id == item?.mediaId }
@@ -113,12 +117,15 @@ class MusicPlayerController(private val context: Context) {
         val duration = controller.duration.takeIf { it > 0 } ?: current?.durationMs ?: 0
         val position = if (item != null) controller.currentPosition.coerceAtLeast(0) else previous.currentPositionMs
         if (item != null && current != null) { beginListeningSession(current); sessionPositionMs = position }
-        _playerState.value = previous.copy(currentSong = current, queue = queue, currentIndex = index,
+        val updated = previous.copy(currentSong = current, queue = queue, currentIndex = index,
             isPlaying = controller.isPlaying, isBuffering = controller.playbackState == Player.STATE_BUFFERING,
             durationMs = duration, currentPositionMs = position, isShuffle = controller.shuffleModeEnabled,
             isRepeatOne = controller.repeatMode == Player.REPEAT_MODE_ONE, repeatMode = controller.repeatMode,
             nextIndex = controller.nextMediaItemIndex, previousIndex = controller.previousMediaItemIndex,
             playbackError = controller.playerError?.let { if (current?.isOnline == true) "No se pudo reproducir el audio de YouTube. Revisa tu conexión o reintenta la canción." else "No se pudo reproducir esta canción." })
+        if (_playerState.value != updated) {
+            _playerState.value = updated
+        }
         _playbackPositionMs.value = position
         _playbackProgress.value = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
         if (controller.isPlaying) startProgressTracking() else stopProgressTracking()
@@ -175,6 +182,7 @@ class MusicPlayerController(private val context: Context) {
             controller.clearMediaItems()
 
             val mediaItems = queue.map(PlaybackSessionStore::item)
+
 
             controller.setMediaItems(mediaItems, index, start)
             controller.prepare()
@@ -264,6 +272,31 @@ class MusicPlayerController(private val context: Context) {
         if (songs.isEmpty()) return
         _playerState.update { it.copy(queue = it.queue + songs) }
         mediaController?.addMediaItems(songs.map(PlaybackSessionStore::item))
+    }
+
+    fun replaceUpcomingQueue(newUpcoming: List<Song>) {
+        val currentState = _playerState.value
+        val curIndex = currentState.currentIndex
+        if (curIndex !in currentState.queue.indices) {
+            if (currentState.queue.isEmpty()) {
+                addSongsToQueue(newUpcoming)
+            }
+            return
+        }
+        val preserved = currentState.queue.take(curIndex + 1)
+        val newQueue = preserved + newUpcoming
+        _playerState.update { it.copy(queue = newQueue) }
+
+        mediaController?.let { controller ->
+            val totalCount = controller.mediaItemCount
+            val startIndexToRemove = curIndex + 1
+            if (totalCount > startIndexToRemove) {
+                controller.removeMediaItems(startIndexToRemove, totalCount)
+            }
+            if (newUpcoming.isNotEmpty()) {
+                controller.addMediaItems(newUpcoming.map(PlaybackSessionStore::item))
+            }
+        }
     }
 
     fun removeDeletedSong(deleted: Song) {
@@ -359,9 +392,16 @@ class MusicPlayerController(private val context: Context) {
         scope.cancel()
     }
 
+    var onQueueEnded: (() -> Unit)? = null
+
     private inner class PlayerEventListener : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             mediaController?.let(::synchronize)
+        }
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                onQueueEnded?.invoke()
+            }
         }
         // ExoPlayer owns automatic advancement and honors repeat OFF/ALL/ONE.
         // Do not restart the queue when playback reaches STATE_ENDED.

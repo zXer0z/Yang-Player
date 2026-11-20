@@ -23,12 +23,15 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,6 +57,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
+import com.yang.player.data.AppearancePreferences
+import com.yang.player.data.ThemeMode
 import com.yang.player.model.Song
 import com.yang.player.ui.theme.LocalArtworkAccent
 import com.yang.player.ui.theme.BackgroundDark
@@ -74,15 +79,38 @@ fun SongOptionsMenuModal(
     onViewAlbum: (String) -> Unit = {},
     onViewArtist: (String) -> Unit = {},
     onDeleteSong: ((Song) -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
+    onStartRadio: ((Song) -> Unit)? = null,
+    cloudPlaylists: List<com.yang.player.data.CloudPlaylistSummary> = emptyList(),
+    onCreateCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
+    onAddToCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
     playbackControls: (@Composable () -> Unit)? = null
 ) {
     if (song == null) return
     val deleteSong = onDeleteSong ?: LocalSongDeletion.current
+    val isCloud = song.mediaUri.startsWith("yanglibrary://")
 
-    var completion by remember(song.mediaUri) { mutableStateOf(false) }
-    if (completion) { MetadataCompletionSheet(song, onDismiss); return }
+    var completionKind by remember(song.mediaUri) { mutableStateOf<com.yang.player.data.CompletionKind?>(null) }
+    if (completionKind != null) {
+        MetadataCompletionSheet(
+            song = song,
+            onDismiss = onDismiss,
+            initialKind = completionKind!!
+        )
+        return
+    }
     var playlistPicker by remember(song.id) { mutableStateOf(false) }
-    if(playlistPicker) { PlaylistPickerSheet(listOf(song),onDismiss);return }
+    if(playlistPicker) {
+        PlaylistPickerSheet(
+            songs = listOf(song),
+            isCloudMode = isCloud,
+            cloudPlaylists = cloudPlaylists,
+            onCreateCloudPlaylist = onCreateCloudPlaylist,
+            onAddToCloudPlaylist = onAddToCloudPlaylist,
+            onDismiss = onDismiss,
+        )
+        return
+    }
     val context = LocalContext.current
     val accent = LocalArtworkAccent.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -96,10 +124,17 @@ fun SongOptionsMenuModal(
             .build()
     }
 
+    val appearancePrefs = remember { AppearancePreferences.get(context) }
+    val appearanceConfig by appearancePrefs.config.collectAsState()
+    val sheetBg = when (appearanceConfig.themeMode) {
+        ThemeMode.OLED_BLACK -> Color(0xFF0A0A0A)
+        else -> lerp(BackgroundDark, accent, 0.08f)
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = lerp(BackgroundDark, accent, 0.08f),
+        containerColor = sheetBg,
         dragHandle = {
             Box(
                 modifier = Modifier
@@ -202,6 +237,15 @@ fun SongOptionsMenuModal(
                     }
                 )
 
+                if (isCloud && onStartRadio != null) OptionItem(
+                    icon = Icons.Rounded.GraphicEq,
+                    label = "Iniciar radio similar",
+                    onClick = {
+                        onStartRadio(song)
+                        onDismiss()
+                    }
+                )
+
                 // 3. Añadir a playlist...
                 OptionItem(
                     icon = Icons.AutoMirrored.Filled.PlaylistAdd,
@@ -240,14 +284,27 @@ fun SongOptionsMenuModal(
                     }
                 )
 
-                if (!song.isOnline) OptionItem(
-                    icon = Icons.Default.Album,
-                    label = "Completar datos faltantes",
-                    onClick = { completion = true }
+                if (!song.isOnline && !isCloud) {
+                    OptionItem(
+                        icon = Icons.Default.Edit,
+                        label = "Editar etiquetas y carátula",
+                        onClick = { completionKind = com.yang.player.data.CompletionKind.METADATA }
+                    )
+                    OptionItem(
+                        icon = Icons.Default.MusicNote,
+                        label = "Buscar o editar letras",
+                        onClick = { completionKind = com.yang.player.data.CompletionKind.LYRICS }
+                    )
+                }
+
+                if (onDownload != null) OptionItem(
+                    icon = Icons.Default.SaveAlt,
+                    label = "Descargar al teléfono",
+                    onClick = { onDownload(); onDismiss() }
                 )
 
                 // 7. Compartir canción
-                OptionItem(
+                if (!isCloud) OptionItem(
                     icon = Icons.Default.Share,
                     label = "Compartir canción",
                     onClick = {
@@ -257,7 +314,7 @@ fun SongOptionsMenuModal(
                 )
 
                 // 8. Eliminar permanentemente
-                if (!song.isOnline) OptionItem(
+                if (!song.isOnline && !isCloud) OptionItem(
                     icon = Icons.Default.DeleteOutline,
                     label = "Eliminar permanentemente",
                     iconTint = Color(0xFFFF7777),

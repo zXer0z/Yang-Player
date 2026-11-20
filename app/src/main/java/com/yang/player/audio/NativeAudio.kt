@@ -8,7 +8,7 @@ object NativeAudio {
     external fun create(inputRate: Int, inputChannels: Int, inputEncoding: Int, outputRate: Int, outputChannels: Int, outputEncoding: Int): Long
     external fun destroy(handle: Long)
     external fun process(handle: Long, input: ByteBuffer, offset: Int, frames: Int, output: ByteBuffer): Int
-    external fun dsp(handle: Long, frequencies: FloatArray, gains: FloatArray, q: FloatArray, preamp: Float, eq: Boolean, headroom: Boolean, limiter: Boolean, volume: Float)
+    external fun dsp(handle: Long, frequencies: FloatArray, gains: FloatArray, q: FloatArray, preamp: Float, eq: Boolean, headroom: Boolean, limiter: Boolean, volume: Float, balance: Float, crossfeed: Boolean, loudness: Boolean)
     external fun openOutput(backend: Int, rate: Int, channels: Int, encoding: Int, bufferMs: Int, deviceId: Int, exclusive: Boolean): Long
     external fun outputInfo(handle: Long): IntArray
     external fun write(handle: Long, data: ByteBuffer, offset: Int, frames: Int): Int

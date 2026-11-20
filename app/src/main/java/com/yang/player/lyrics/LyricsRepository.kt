@@ -52,6 +52,16 @@ class LyricsRepository(context: Context) {
         if (preferences.contains(song.id) && candidates.isNotEmpty()) return candidates.maxBy(::quality).also {
             synchronized(cache) { cache.put(key, it) }
         }
+        if (song.mediaUri.startsWith(com.yang.player.data.ServerLibrary.SCHEME)) {
+            val remote = withContext(Dispatchers.IO) {
+                safely {
+                    com.yang.player.data.ServerLibrary.lyrics(context, song.mediaUri, song.artist, song.title)
+                        ?.let { LyricsParser.parse(it, song.durationMs) }
+                }
+            }
+            if (remote != null) candidates.add(remote)
+            return candidates.maxByOrNull(::quality)?.also { synchronized(cache) { cache.put(key, it) } }
+        }
         if (song.isOnline) return candidates.maxByOrNull(::quality)
         try {
             withTimeout(10_000) {
@@ -96,6 +106,25 @@ class LyricsRepository(context: Context) {
         preferences.edit().putString(song.id, uri.toString()).apply()
         synchronized(cache) { cache.put("${song.id}:${song.mediaUri}", document) }
         document
+    }
+
+    fun hasCustomLyrics(song: Song): Boolean {
+        return preferences.contains(song.id)
+    }
+
+    suspend fun removeLyrics(song: Song): Unit = withContext(Dispatchers.IO) {
+        preferences.edit().remove(song.id).apply()
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(song.mediaUri.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+        val file = File(context.filesDir, "online_lyrics/$hash.lrc")
+        if (file.exists()) file.delete()
+        synchronized(cache) { cache.remove("${song.id}:${song.mediaUri}") }
+    }
+
+    suspend fun loadRawText(song: Song): String? = withContext(Dispatchers.IO) {
+        preferences.getString(song.id, null)?.let { uriStr ->
+            safely { context.contentResolver.openInputStream(Uri.parse(uriStr))?.use { it.readBytes().toString(Charsets.UTF_8) } }
+        }
     }
 
     /** The caller checks existing embedded/imported lyrics before offering this action. */

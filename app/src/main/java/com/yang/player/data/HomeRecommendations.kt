@@ -51,7 +51,8 @@ object HomeRecommendations {
                 (if (recentlyPlayed) 7.0 else 0.0)
         }
         val pool = library.filter { it.id != currentSongId }.ifEmpty { library }
-        val discovery = pool.sortedByDescending(::score)
+        val scores = library.associate { it.id to score(it) }
+        val discovery = pool.sortedByDescending { scores.getValue(it.id) }
         val unfinished = pool.filter { resumePosition(it, profile) > 0 }
             .sortedByDescending { profile.tracks[it.id]?.lastPlayedAt }.take(2)
         val recent = pool.filter { (profile.tracks[it.id]?.playCount ?: 0) > 0 }
@@ -72,7 +73,7 @@ object HomeRecommendations {
         val albumTracks = collections.albumTracks
         val rankedAlbums = collections.albums.sortedByDescending { album ->
             val tracks = albumTracks[album.id].orEmpty()
-            tracks.maxOfOrNull(::score)?.plus(noise(album.id) * 5) ?: 0.0
+            tracks.maxOfOrNull { scores.getValue(it.id) }?.plus(noise(album.id) * 5) ?: 0.0
         }
         val albums = mutableListOf<Album>()
         rankedAlbums.forEach { album ->

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,31 +24,34 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
+import com.yang.player.data.ArtistCollection
+import com.yang.player.data.UnifiedPlaylist
+import com.yang.player.data.rememberArtistPhoto
 import com.yang.player.model.Album
 import com.yang.player.model.CategoryFilter
 import com.yang.player.model.Song
@@ -57,10 +61,7 @@ import com.yang.player.ui.components.HeroContinueListeningCarousel
 import com.yang.player.ui.components.HomeHeader
 import com.yang.player.ui.components.SongListItem
 import com.yang.player.ui.theme.LocalArtworkAccent
-import com.yang.player.ui.theme.BackgroundDark
-import com.yang.player.ui.theme.HiResCyan
 import com.yang.player.ui.theme.SurfaceCard
-import com.yang.player.ui.theme.SurfaceElevated
 import com.yang.player.ui.theme.TextMuted
 import com.yang.player.ui.theme.TextWhite
 import java.time.LocalTime
@@ -74,11 +75,13 @@ fun HomeScreen(
     featuredSongs: List<Song>,
     favoriteSongs: List<Song>,
     albums: List<Album>,
-    allSongs: List<Song> = emptyList(),
+    artists: List<ArtistCollection>,
+    allPlaylists: List<UnifiedPlaylist>,
     currentPlayingSongId: String?,
     isPlaying: Boolean,
     onSongSelected: (Song, List<Song>) -> Unit,
     onAlbumSelected: (Album) -> Unit,
+    onArtistSelected: (String) -> Unit = {},
     onPlayToggle: (Song) -> Unit,
     onProfileClick: () -> Unit,
     onViewAllFavorites: () -> Unit,
@@ -86,9 +89,9 @@ fun HomeScreen(
     suggestedSongs: List<Song> = emptyList(),
     recommendedAlbums: List<Album> = emptyList(),
     onFeaturedSongSelected: (Song, List<Song>) -> Unit = onSongSelected,
-    onPlaylists: () -> Unit = {}
+    onPlaylists: () -> Unit = {},
+    isCloudMode: Boolean = false,
 ) {
-    val hiResSongs = remember(allSongs) { allSongs.filter { it.isHiRes } }
     val middleQueue = favoriteSongs.ifEmpty { suggestedSongs }
     val displayedFavorites = remember(middleQueue) { middleQueue.take(4) }
     val homeAlbums = recommendedAlbums.ifEmpty { albums.take(10) }
@@ -99,13 +102,10 @@ fun HomeScreen(
     }
 
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize(),
-        // Follow the dock's measured, animated height rather than reserving the
-        // expanded menu's space while the dock is compact.
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 12.dp, bottom = bottomContentPadding)
     ) {
-        // 1. Header with greeting and YouTube profile avatar
+        // 1. Header with greeting and profile avatar
         item {
             HomeHeader(
                 userName = userName,
@@ -115,7 +115,7 @@ fun HomeScreen(
             )
         }
 
-        // 2. Filter chips ("Todo", "Álbumes", "Listas", "+ Hi-Res")
+        // 2. Filter chips ("Todo", "Álbumes", "Artistas", "Listas")
         item {
             CategoryChipsRow(
                 selectedCategory = selectedCategory,
@@ -137,9 +137,8 @@ fun HomeScreen(
                     )
                 }
 
-                // Separate the featured artwork from the quieter library sections.
                 item {
-                    Spacer(modifier = Modifier.height(30.dp))
+                    Spacer(modifier = Modifier.height(28.dp))
                     SectionHeader(
                         title = if (favoriteSongs.isNotEmpty()) "Favoritos" else "Para descubrir",
                         actionText = "Ver todo",
@@ -147,7 +146,7 @@ fun HomeScreen(
                     )
                 }
 
-                // Curated Favorites List (Only top songs shown, fast-fling optimized)
+                // Curated Favorites List
                 items(
                     items = displayedFavorites,
                     key = { it.id },
@@ -155,41 +154,58 @@ fun HomeScreen(
                 ) { song ->
                     SongListItem(
                         song = song,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                         isPlayingThisSong = song.id == currentPlayingSongId,
                         highlightCurrentSong = false,
-                        onClick = { onSongSelected(song, middleQueue) },
-                        onOptionsClick = { /* Options menu */ }
+                        onClick = { onSongSelected(song, middleQueue) }
                     )
                 }
 
-                // Section Title: "Álbumes para ti" matching Image 2 reference
-                if (homeAlbums.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(36.dp))
+                allPlaylists.firstOrNull { it.id == "cloud_recent" }?.let { recent ->
+                    item(key = "cloud_recent_title") {
+                        Spacer(modifier = Modifier.height(28.dp))
                         SectionHeader(
-                            title = "Álbumes",
-                            actionText = "Explorar",
-                            onActionClick = { onCategorySelected(CategoryFilter.ALBUMES) }
+                            title = recent.name,
+                            actionText = "Ver listas",
+                            onActionClick = { onCategorySelected(CategoryFilter.LISTAS) }
                         )
                     }
+                    items(recent.songs.take(5), key = { "cloud_recent_${it.id}" }) { song ->
+                        SongListItem(
+                            song = song,
+                            isPlayingThisSong = song.id == currentPlayingSongId,
+                            highlightCurrentSong = false,
+                            onClick = { onSongSelected(song, recent.songs) }
+                        )
+                    }
+                }
 
-                    // Horizontal Álbumes Carousel with larger 160dp covers
-                    item {
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentPadding = PaddingValues(horizontal = 20.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(
-                                items = homeAlbums.take(10),
-                                key = { it.id },
-                                contentType = { "album_card" }
-                            ) { album ->
-                                AlbumCard(
-                                    album = album,
-                                    onClick = { onAlbumSelected(album) }
-                                )
+
+
+                // Recommended Albums Carousel
+                if (homeAlbums.isNotEmpty()) {
+                    item(contentType = "albums_section") {
+                        Column {
+                            Spacer(modifier = Modifier.height(28.dp))
+                            SectionHeader(
+                                title = "Álbumes recomendados",
+                                actionText = "Ver todo",
+                                onActionClick = { onCategorySelected(CategoryFilter.ALBUMES) }
+                            )
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(
+                                    items = homeAlbums,
+                                    key = { it.id },
+                                    contentType = { "album_card" }
+                                ) { album ->
+                                    AlbumCard(
+                                        album = album,
+                                        onClick = { onAlbumSelected(album) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -205,7 +221,6 @@ fun HomeScreen(
                     )
                 }
 
-                // 2-column grid of albums
                 val albumPairs = albums.chunked(2)
                 items(
                     items = albumPairs,
@@ -235,106 +250,127 @@ fun HomeScreen(
                 }
             }
 
-            CategoryFilter.LISTAS -> {
-                item { androidx.compose.material3.TextButton(onClick=onPlaylists) { Text("Tus playlists · Crear y organizar",color=LocalArtworkAccent.current) } }
+            CategoryFilter.ARTISTAS -> {
                 item {
                     Spacer(modifier = Modifier.height(10.dp))
                     SectionHeader(
-                        title = "Listas de Reproducción",
-                        subtitle = "Listas inteligentes de tu biblioteca"
+                        title = "Artistas",
+                        subtitle = "${artists.size} artistas en tu biblioteca"
                     )
                 }
 
-                item {
-                    SmartPlaylistCard(
-                        title = "Colección Hi-Res Masters",
-                        subtitle = "${hiResSongs.size} pistas · Audio 24-bit/96kHz y DSD",
-                        icon = Icons.Default.GraphicEq,
-                        accentGradient = Brush.horizontalGradient(
-                            listOf(Color(0xFF007AFF), Color(0xFF38B2AC))
-                        ),
-                        onClick = {
-                            if (hiResSongs.isNotEmpty()) {
-                                onSongSelected(hiResSongs.first(), hiResSongs)
-                            }
+                val artistPairs = artists.chunked(2)
+                items(
+                    items = artistPairs,
+                    key = { pair -> pair.first().id }
+                ) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        ArtistGridItem(
+                            name = pair[0].name,
+                            trackCount = pair[0].songs.size,
+                            songs = pair[0].songs,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onArtistSelected(pair[0].name) }
+                        )
+                        if (pair.size > 1) {
+                            ArtistGridItem(
+                                name = pair[1].name,
+                                trackCount = pair[1].songs.size,
+                                songs = pair[1].songs,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onArtistSelected(pair[1].name) }
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
-                    )
-                }
-
-                item {
-                    SmartPlaylistCard(
-                        title = "Favoritos",
-                        subtitle = "${favoriteSongs.size} canciones preferidas",
-                        icon = Icons.Default.Favorite,
-                        accentGradient = Brush.horizontalGradient(
-                            listOf(Color(0xFFFF2D55), Color(0xFFAF52DE))
-                        ),
-                        onClick = {
-                            if (favoriteSongs.isNotEmpty()) {
-                                onSongSelected(favoriteSongs.first(), favoriteSongs)
-                            }
-                        }
-                    )
-                }
-
-                item {
-                    SmartPlaylistCard(
-                        title = "Recientes y Novedades",
-                        subtitle = "${allSongs.take(25).size} pistas agregadas recientemente",
-                        icon = Icons.Default.History,
-                        accentGradient = Brush.horizontalGradient(
-                            listOf(Color(0xFF5856D6), Color(0xFF007AFF))
-                        ),
-                        onClick = {
-                            if (allSongs.isNotEmpty()) {
-                                onSongSelected(allSongs.first(), allSongs.take(25))
-                            }
-                        }
-                    )
-                }
-
-                item {
-                    SmartPlaylistCard(
-                        title = "Biblioteca Completa",
-                        subtitle = "${allSongs.size} canciones en total",
-                        icon = Icons.Default.LibraryMusic,
-                        accentGradient = Brush.horizontalGradient(
-                            listOf(Color(0xFF1E2638), Color(0xFF2C3E50))
-                        ),
-                        onClick = {
-                            if (allSongs.isNotEmpty()) {
-                                onSongSelected(allSongs.first(), allSongs)
-                            }
-                        }
-                    )
+                    }
                 }
             }
 
-            CategoryFilter.HI_RES -> {
+            CategoryFilter.LISTAS -> {
                 item {
                     Spacer(modifier = Modifier.height(10.dp))
-                    HiResAudiophileBanner(count = hiResSongs.size)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Playlists",
+                                color = TextWhite,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "${allPlaylists.size} listas disponibles",
+                                color = TextMuted,
+                                fontSize = 13.sp
+                            )
+                        }
+                        TextButton(onClick = onPlaylists) {
+                            Text("Ver todas", color = LocalArtworkAccent.current, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 }
 
-                item {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    SectionHeader(
-                        title = "Pistas Hi-Res Lossless",
-                        subtitle = "${hiResSongs.size} pistas en alta resolución"
-                    )
-                }
-
+                val playlistPairs = allPlaylists.chunked(2)
                 items(
-                    items = hiResSongs,
-                    key = { it.id },
-                    contentType = { "hires_song_row" }
-                ) { song ->
-                    SongListItem(
-                        song = song,
-                        isPlayingThisSong = song.id == currentPlayingSongId,
-                        highlightCurrentSong = false,
-                        onClick = { onSongSelected(song, hiResSongs) }
-                    )
+                    items = playlistPairs,
+                    key = { pair -> pair.first().id }
+                ) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        HomePlaylistGridItem(
+                            playlist = pair[0],
+                            accent = LocalArtworkAccent.current,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                if (pair[0].songs.isNotEmpty()) {
+                                    onSongSelected(pair[0].songs.first(), pair[0].songs)
+                                } else {
+                                    onPlaylists()
+                                }
+                            },
+                            onQuickPlay = {
+                                if (pair[0].songs.isNotEmpty()) {
+                                    onSongSelected(pair[0].songs.first(), pair[0].songs)
+                                }
+                            }
+                        )
+                        if (pair.size > 1) {
+                            HomePlaylistGridItem(
+                                playlist = pair[1],
+                                accent = LocalArtworkAccent.current,
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    if (pair[1].songs.isNotEmpty()) {
+                                        onSongSelected(pair[1].songs.first(), pair[1].songs)
+                                    } else {
+                                        onPlaylists()
+                                    }
+                                },
+                                onQuickPlay = {
+                                    if (pair[1].songs.isNotEmpty()) {
+                                        onSongSelected(pair[1].songs.first(), pair[1].songs)
+                                    }
+                                }
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
                 }
             }
         }
@@ -454,146 +490,140 @@ private fun AlbumGridItem(
 }
 
 @Composable
-private fun SmartPlaylistCard(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accentGradient: Brush,
+private fun ArtistGridItem(
+    name: String,
+    trackCount: Int,
+    songs: List<Song>,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 6.dp)
+    val artistPhoto = rememberArtistPhoto(name)
+    val fallbackCover = remember(songs) { songs.firstOrNull { !it.artworkUri.isNullOrBlank() }?.artworkUri }
+    val effectiveUri = artistPhoto ?: fallbackCover
+
+    Column(
+        modifier = modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(SurfaceElevated)
-            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(18.dp))
             .clickable { onClick() }
-            .padding(14.dp)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(CircleShape)
+                .background(SurfaceCard)
+                .border(1.5.dp, Color.White.copy(alpha = 0.08f), CircleShape),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(accentGradient),
-                contentAlignment = Alignment.Center
-            ) {
+            if (!effectiveUri.isNullOrBlank()) {
+                AsyncImage(
+                    model = effectiveUri,
+                    contentDescription = name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
                 Icon(
-                    imageVector = icon,
+                    imageVector = Icons.Rounded.Person,
                     contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = TextWhite,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = subtitle,
-                    color = TextMuted,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Reproducir",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    tint = Color.White.copy(alpha = 0.35f),
+                    modifier = Modifier.size(48.dp)
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = name,
+            color = TextWhite,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        Text(
+            text = "$trackCount canciones",
+            color = TextMuted,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
 @Composable
-private fun HiResAudiophileBanner(count: Int) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF0F1E2E),
-                        Color(0xFF0A131C),
-                        Color(0xFF07090C)
-                    )
-                )
-            )
-            .border(1.dp, Color(0x3338B2AC), RoundedCornerShape(20.dp))
-            .padding(18.dp)
+private fun HomePlaylistGridItem(
+    playlist: UnifiedPlaylist,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onQuickPlay: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable { onClick() }
     ) {
-        Column {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(HiResCyan.copy(alpha = 0.2f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = "HI-RES AUDIO",
-                        color = HiResCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(16.dp))
+        ) {
+            PlaylistMosaicCover(
+                covers = playlist.coverArtworks,
+                gradientColors = playlist.gradientColors,
+                icon = playlist.icon,
+                modifier = Modifier.fillMaxSize()
+            )
 
-                Text(
-                    text = "STUDIO MASTER DIRECT",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.sp
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                    .clickable { onQuickPlay() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "Reproducir",
+                    tint = accent,
+                    modifier = Modifier.size(20.dp)
                 )
             }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = "Reproducción Bit-Perfect a 32-bit",
-                color = TextWhite,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Decodificación nativa sin pérdidas para FLAC, DSD64/128, ALAC y WAV hasta 192 kHz. $count pistas en tu dispositivo.",
-                color = TextMuted,
-                fontSize = 12.sp,
-                lineHeight = 17.sp
-            )
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = playlist.name,
+            color = TextWhite,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        Text(
+            text = playlist.subtitle,
+            color = TextMuted,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

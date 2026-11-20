@@ -30,8 +30,8 @@ android {
         applicationId = "com.yang.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 13
+        versionName = "1.0.12"
         val yinCert = providers.gradleProperty("yinCertSha256").orNull ?: debugCertificateSha256()
         require(yinCert.matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid yinCertSha256" }
         buildConfigField("String", "YIN_CERT_SHA256", "\"${yinCert.lowercase()}\"")
@@ -105,6 +105,7 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.common)
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
 
     // Coil for async image loading (local album art + YouTube avatar/thumbnails)
     implementation(libs.coil.compose)

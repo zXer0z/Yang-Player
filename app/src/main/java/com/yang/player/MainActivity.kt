@@ -41,7 +41,11 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.Color
+import com.yang.player.data.AppearancePreferences
+import com.yang.player.data.ThemeMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +86,7 @@ class MainActivity : ComponentActivity() {
         if (audioGranted) {
             viewModel.scanLocalDeviceAudio()
         }
+        com.yang.player.audio.AudioEngineStore.get(this).refreshRoute()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -129,6 +134,14 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        }
+
         if (permissionsToRequest.isNotEmpty()) {
             requestPermissionLauncher.launch(permissionsToRequest.toTypedArray())
         } else {
@@ -154,6 +167,12 @@ fun YangPlayerRootApp(viewModel: PlayerViewModel, onRescan: () -> Unit = { viewM
 @Composable
 private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) {
     val screenStateHolder = rememberSaveableStateHolder()
+    val cloudMode by viewModel.cloudMode.collectAsState()
+    val cloudLoading by viewModel.cloudLoading.collectAsState()
+    val cloudStatus by viewModel.cloudStatus.collectAsState()
+    val downloadedCloudIds by viewModel.downloadedCloudIds.collectAsState()
+    val cloudStreamQuality by viewModel.cloudStreamQuality.collectAsState()
+    val cloudPlaylists by viewModel.cloudPlaylists.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -174,12 +193,15 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
         else -> emptyList()
     } }
     val globalCover = if(globalDetail) detailTracks.firstOrNull { it.artworkUri != null } ?: detailTracks.firstOrNull() else null
+    val isArtistDetail = globalDetail && libraryDestination?.page == "artists"
+    val artistPhoto = com.yang.player.data.rememberArtistPhoto(if (isArtistDetail) libraryDestination?.title else null)
+    val effectiveDetailArtwork = if (isArtistDetail && !artistPhoto.isNullOrBlank()) artistPhoto else globalCover?.artworkUri
     BackHandler(globalDetail && !isFullPlayerVisible) { viewModel.consumeLibraryDestination() }
     // Keep the artwork palette warm while browsing, so opening the sheet never
     // starts with a different fallback color or repeats artwork extraction.
     val playingPalette = rememberArtworkPalette(playerState.currentSong)
-    val libraryPalette = rememberArtworkPalette(globalCover)
-    val artworkPalette = if (globalCover != null && !isFullPlayerVisible) libraryPalette else playingPalette
+    val libraryPalette = rememberArtworkPalette(effectiveDetailArtwork, globalCover)
+    val artworkPalette = if ((effectiveDetailArtwork != null || globalCover != null) && !isFullPlayerVisible) libraryPalette else playingPalette
     val artworkAccent = artworkPalette.accentColor // The backdrop animates in drawing; avoid recomposing the whole UI every frame.
     val backdropLayer = rememberGraphicsLayer()
     var backdropOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -209,14 +231,32 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
     }
     LaunchedEffect(selectedTab, isFullPlayerVisible) { compactDock = false }
 
-    CompositionLocalProvider(LocalArtworkAccent provides artworkAccent) {
+    val context = LocalContext.current
+    val appearancePrefs = remember { AppearancePreferences.get(context) }
+    val appearanceConfig by appearancePrefs.config.collectAsState()
+
+    val effectiveAccent = when (appearanceConfig.themeMode) {
+        ThemeMode.DYNAMIC -> artworkAccent
+        ThemeMode.OLED_BLACK -> Color(0xFFE2E8F0)
+        ThemeMode.CUSTOM_ACCENT -> runCatching { Color(android.graphics.Color.parseColor(appearanceConfig.staticAccentHex)) }.getOrDefault(Color(0xFF007AFF))
+    }
+
+    val effectiveBackground = when (appearanceConfig.themeMode) {
+        ThemeMode.OLED_BLACK -> Color.Black
+        else -> BackgroundDark
+    }
+
+    val showAtmosphere = appearanceConfig.themeMode == ThemeMode.DYNAMIC
+
+    CompositionLocalProvider(LocalArtworkAccent provides effectiveAccent) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(BackgroundDark)
+            .background(effectiveBackground)
     ) {
         // Main Screen Area based on selected bottom tab
         Box(modifier = Modifier.fillMaxSize()
+            .background(effectiveBackground)
             .onGloballyPositioned { backdropOrigin = it.positionInRoot() }
             .drawWithContent {
                 if (hasNativeBlur) {
@@ -227,16 +267,35 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 }
             }
         ) {
-            ArtworkAtmosphere(artworkPalette)
+            if (showAtmosphere) {
+                ArtworkAtmosphere(artworkPalette)
+            }
             // Insets protect content, while the atmosphere still fills system bars.
             Box(Modifier.fillMaxSize().then(if(globalDetail) Modifier else Modifier.statusBarsPadding()).nestedScroll(dockScrollConnection)) {
             if(globalDetail) {
                 CollectionDetailScreen(libraryDestination?.title.orEmpty(), libraryDestination?.page == "artists", detailTracks, favoriteSongs.map { it.id }.toSet(), playerState.currentSong?.id, playerState.isPlaying,
                     dockHeight + 12.dp, onBack=viewModel::consumeLibraryDestination, onPlay=viewModel::playSong,
-                    onPlayNext=viewModel::playNext, onAddToQueue=viewModel::addToQueue, onFavorite=viewModel::toggleFavorite, onAddCollection=viewModel::addSongsToQueue)
-            } else { screenStateHolder.SaveableStateProvider(selectedTab.name) {
+                    onPlayNext=viewModel::playNext, onAddToQueue=viewModel::addToQueue, onFavorite=viewModel::toggleFavorite, onAddCollection=viewModel::addSongsToQueue,
+                    onStartRadio = if (cloudMode) viewModel::startCloudRadio else null,
+                    cloudPlaylists = cloudPlaylists,
+                    onCreateCloudPlaylist = viewModel::createCloudPlaylist,
+                    onAddToCloudPlaylist = viewModel::addToCloudPlaylist)
+            } else { screenStateHolder.SaveableStateProvider(
+                if (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES) "$selectedTab-$cloudMode" else selectedTab.name
+            ) {
+            Column(Modifier.fillMaxSize()) {
+                if (cloudMode && (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES)) {
+                    when {
+                        cloudLoading && selectedTab == NavigationTab.INICIO ->
+                            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                        cloudStatus != null -> androidx.compose.material3.TextButton(onClick = viewModel::reloadCloudLibrary) {
+                            androidx.compose.material3.Text(cloudStatus.orEmpty() + " · Reintentar")
+                        }
+                    }
+                }
             when (selectedTab) {
                 NavigationTab.INICIO -> {
+                    val playlists by viewModel.homePlaylists.collectAsState()
                     HomeScreen(
                         onPlaylists = viewModel::openPlaylists,
                         suggestedSongs = suggestedSongs,
@@ -250,14 +309,17 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         featuredSongs = featuredSongs,
                         favoriteSongs = favoriteSongs,
                         albums = albums,
-                        allSongs = allSongs,
+                        artists = collections.artists,
+                        allPlaylists = playlists,
                         currentPlayingSongId = playerState.currentSong?.id,
                         isPlaying = playerState.isPlaying,
                         onSongSelected = { song, queue -> viewModel.playSong(song, queue) },
                         onAlbumSelected = viewModel::openAlbum,
+                        onArtistSelected = viewModel::openArtist,
                         onPlayToggle = { song -> viewModel.toggleFeaturedSong(song) },
                         onProfileClick = { viewModel.selectTab(NavigationTab.TU) },
-                        onViewAllFavorites = viewModel::openFavorites
+                        onViewAllFavorites = viewModel::openFavorites,
+                        isCloudMode = cloudMode,
                     )
                 }
                 NavigationTab.CANCIONES -> {
@@ -274,7 +336,19 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onAddToQueue = { song -> viewModel.addToQueue(song) },
                         onToggleFavorite = { song -> viewModel.toggleFavorite(song) },
                         onViewAlbum = viewModel::openAlbumByName,
-                        onViewArtist = viewModel::openArtist
+                        onViewArtist = viewModel::openArtist,
+                        cloudDownloadName = viewModel::cloudDownloadName,
+                        onCloudDownload = viewModel::downloadCloudSong,
+                        isCloudMode = cloudMode,
+                        isCloudRefreshing = cloudLoading,
+                        onCloudRefresh = viewModel::reloadCloudLibrary,
+                        downloadedCloudIds = downloadedCloudIds,
+                        streamQuality = cloudStreamQuality,
+                        onStreamQualitySelected = viewModel::setCloudStreamQuality,
+                        cloudPlaylists = cloudPlaylists,
+                        onCreateCloudPlaylist = viewModel::createCloudPlaylist,
+                        onAddToCloudPlaylist = viewModel::addToCloudPlaylist,
+                        onStartRadio = if (cloudMode) viewModel::startCloudRadio else null,
                     )
                 }
                 NavigationTab.HI_FI -> {
@@ -301,7 +375,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onSongs = { viewModel.selectTab(NavigationTab.CANCIONES) }, onRescan = onRescan)
                 }
             }
-            } }
+            } } }
             }
         }
 
@@ -325,7 +399,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .onSizeChanged { size -> dockHeight = maxOf(dockHeight, with(density) { size.height.toDp() }) }
+                .onSizeChanged { size -> dockHeight = with(density) { size.height.toDp() } }
                 .navigationBarsPadding()
         )
 
@@ -333,11 +407,8 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
         val previousSong = playerState.queue.getOrNull(playerState.previousIndex)
 
         // Full Screen Player Modal (Expands on MiniPlayer click)
-        // High frequency progress flows are ONLY collected while modal is open
+        // High frequency progress flows are collected ONLY inside the modal's progress component
         if (isFullPlayerVisible) {
-            val progress by viewModel.playbackProgress.collectAsState()
-            val playbackPositionMs by viewModel.playbackPositionMs.collectAsState()
-
             FullPlayerModal(
                 palette = playingPalette,
                 song = playerState.currentSong,
@@ -346,8 +417,8 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 nextSong = nextSong,
                 previousSong = previousSong,
                 isPlaying = playerState.isPlaying,
-                progress = progress,
-                currentPositionMs = playbackPositionMs,
+                playbackProgress = viewModel.playbackProgress,
+                playbackPositionMs = viewModel.playbackPositionMs,
                 durationMs = playerState.durationMs,
                 isFavorite = favoriteSongs.any { it.id == playerState.currentSong?.id },
                 isShuffle = playerState.isShuffle,
@@ -363,7 +434,11 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 onQueueMove = { from, to -> viewModel.moveQueueItem(from, to) },
                 onToggleFavorite = { song -> viewModel.toggleFavorite(song) },
                 onPlayNext = { song -> viewModel.playNext(song) },
-                onAddToQueue = { song -> viewModel.addToQueue(song) }
+                onAddToQueue = { song -> viewModel.addToQueue(song) },
+                onStartRadio = if (cloudMode) viewModel::startCloudRadio else null,
+                cloudPlaylists = cloudPlaylists,
+                onCreateCloudPlaylist = viewModel::createCloudPlaylist,
+                onAddToCloudPlaylist = viewModel::addToCloudPlaylist
             )
         }
     }

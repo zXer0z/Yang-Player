@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +52,7 @@ fun BottomNavBar(
     backdropLayer: GraphicsLayer? = null,
     backdropOrigin: Offset = Offset.Zero
 ) {
+    val haptic = LocalHapticFeedback.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -74,7 +77,10 @@ fun BottomNavBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier
-                        .clickable { onTabSelected(tab) }
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onTabSelected(tab)
+                        }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Icon(
@@ -83,20 +89,15 @@ fun BottomNavBar(
                         tint = tint,
                         modifier = Modifier.size(24.dp)
                     )
+
                     Text(
                         text = tab.label,
                         color = tint,
                         fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.padding(top = 4.dp)
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                     )
                 }
             }
         }
-        HorizontalDivider(
-            modifier = Modifier.align(Alignment.TopCenter),
-            color = MiniPlayerBorder,
-            thickness = 1.dp
-        )
     }
 }

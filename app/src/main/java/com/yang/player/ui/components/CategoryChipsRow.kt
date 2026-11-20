@@ -23,11 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yang.player.model.CategoryFilter
-import com.yang.player.ui.theme.AccentBlue
-import com.yang.player.ui.theme.HiResCyan
-import com.yang.player.ui.theme.SurfaceElevated
-import com.yang.player.ui.theme.TextMuted
-import com.yang.player.ui.theme.TextWhite
 
 @Composable
 fun CategoryChipsRow(
@@ -67,34 +62,13 @@ fun CategoryChipsRow(
                     .padding(horizontal = 18.dp, vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (filter == CategoryFilter.HI_RES && !isSelected) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "+",
-                            color = HiResCyan,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Hi-Res",
-                            color = textColor,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                } else {
-                    Text(
-                        text = filter.label,
-                        color = textColor,
-                        fontSize = 14.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
-                    )
-                }
+                Text(
+                    text = filter.label,
+                    color = textColor,
+                    fontSize = 14.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                )
             }
         }
     }
 }
-

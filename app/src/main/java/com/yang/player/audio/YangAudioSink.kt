@@ -3,8 +3,11 @@ package com.yang.player.audio
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioRouting
 import android.media.AudioTrack
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.AuxEffectInfo
@@ -96,7 +99,8 @@ class YangAudioSink(context: Context) : AudioSink {
         if (lastRequestKey != null && lastRequestKey != key) { fallbackKey = null; fallbackReason = "" }
         lastRequestKey = key
         outputChannels = min(2, input.channelCount)
-        val device = requestedDevice ?: store.predictedDevice()
+        val predicted = store.predictedDevice()
+        val device = requestedDevice ?: if (settings.route != AudioRoute.SPEAKER) predicted else null
         var last: Exception? = null
         val candidates = if (fallbackKey == requestKey(settings)) listOf("AudioTrack") else when(settings.backend) {
             OutputBackend.HI_RES -> listOf("AAudio exclusivo", "AAudio", "AudioTrack")
@@ -120,11 +124,12 @@ class YangAudioSink(context: Context) : AudioSink {
                 if (Build.VERSION.SDK_INT < 31 && encoding in listOf(21, 22)) continue
                 try {
                     if (backend.startsWith("AAudio") || backend == "OpenSL ES") {
+                        val aaudioDeviceId = if (backend == "OpenSL ES" || settings.route == AudioRoute.SPEAKER) 0 else device?.id ?: 0
                         nativeOutput = NativeAudio.openOutput(if (backend == "OpenSL ES") 2 else 1, rate, outputChannels, encoding, settings.bufferMs,
-                            if (backend == "OpenSL ES") 0 else device?.id ?: 0, backend == "AAudio exclusivo")
+                            aaudioDeviceId, backend == "AAudio exclusivo")
                         check(nativeOutput != 0L) { "Salida nativa rechazada" }
                         val info = NativeAudio.outputInfo(nativeOutput)
-                        if (backend.startsWith("AAudio") && device != null && info[6] > 0 && info[6] != device.id) {
+                        if (backend.startsWith("AAudio") && device != null && settings.route != AudioRoute.SPEAKER && info[6] > 0 && info[6] != device.id) {
                             NativeAudio.closeOutput(nativeOutput); nativeOutput = 0
                             continue
                         }
@@ -144,7 +149,17 @@ class YangAudioSink(context: Context) : AudioSink {
                         if (sessionId > 0) builder.setSessionId(sessionId)
                         val candidate = builder.build()
                         if (candidate.state != AudioTrack.STATE_INITIALIZED) { candidate.release(); error("AudioTrack no inicializado") }
-                        if (device != null && !candidate.setPreferredDevice(device)) note = "Android eligió la ruta de salida."
+                        if (device != null) {
+                            if (!candidate.setPreferredDevice(device)) note = "Android eligió la ruta de salida."
+                        } else {
+                            candidate.setPreferredDevice(null)
+                        }
+                        candidate.addOnRoutingChangedListener(AudioRouting.OnRoutingChangedListener { router ->
+                            val routed = router?.routedDevice
+                            android.util.Log.i("YangAudio", "AudioTrack dynamic routing changed to: ${routed?.productName} (type=${routed?.type})")
+                            store.refreshRoute()
+                            report()
+                        }, Handler(Looper.getMainLooper()))
                         track = candidate
                         outputRate = candidate.sampleRate; outputEncoding = candidate.audioFormat; outputChannels = candidate.channelCount
                         bufferFrames = candidate.bufferSizeInFrames; exclusive = false
@@ -172,7 +187,7 @@ class YangAudioSink(context: Context) : AudioSink {
     }
     private fun applyDsp(settings: EngineProfile) {
         if (dsp != 0L) NativeAudio.dsp(dsp, settings.bands.map { it.hz }.toFloatArray(), settings.bands.map { it.gain }.toFloatArray(), settings.bands.map { it.q }.toFloatArray(), settings.preamp,
-            settings.eq, settings.headroom, settings.limiter, volume)
+            settings.eq, settings.headroom, settings.limiter, volume, settings.balance, settings.crossfeed, settings.loudnessNorm)
     }
     private fun startOutput() {
         if (outputStarted) return
@@ -281,9 +296,11 @@ class YangAudioSink(context: Context) : AudioSink {
             val nativeInput = if (buffer.isDirect) buffer else inputCopy.apply {
                 clear(); put(buffer.duplicate().apply { limit(position() + frames * frameBytes) }); flip()
             }
+            val startPos = buffer.position()
             val bytes = NativeAudio.process(dsp, nativeInput, if (buffer.isDirect) buffer.position() else 0, frames, pending)
             if (bytes < 0) throw AudioSink.WriteException(-1, input, false)
             buffer.position(buffer.position() + frames * frameBytes)
+            MusicSpectrum.offer(buffer, startPos, buffer.position(), input.sampleRate, input.channelCount, input.pcmEncoding)
             pending.position(0); pending.limit(bytes)
             if (!drainPending()) return !buffer.hasRemaining()
         }
@@ -320,7 +337,11 @@ class YangAudioSink(context: Context) : AudioSink {
     override fun getAudioAttributes() = attributes
     override fun setAudioSessionId(audioSessionId: Int) { sessionId = audioSessionId }
     override fun setAuxEffectInfo(auxEffectInfo: AuxEffectInfo) {}
-    override fun setPreferredDevice(audioDeviceInfo: AudioDeviceInfo?) { requestedDevice = audioDeviceInfo; track?.setPreferredDevice(audioDeviceInfo) }
+    override fun setPreferredDevice(audioDeviceInfo: AudioDeviceInfo?) {
+        requestedDevice = audioDeviceInfo
+        val target = if (audioDeviceInfo != null && AudioEngineStore.routeOf(audioDeviceInfo) != AudioRoute.SPEAKER) audioDeviceInfo else null
+        track?.setPreferredDevice(target)
+    }
     override fun enableTunnelingV21() { throw IllegalStateException("El DSP Yang no usa tunneling") }
     override fun disableTunneling() {}
     override fun setVolume(volume: Float) { this.volume = volume.coerceIn(0f, 1f); profile?.let(::applyDsp) }

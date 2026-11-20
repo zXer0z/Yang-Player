@@ -28,6 +28,11 @@ typedef struct {
     double gain,target_gain;
     int limiter,dither;
     uint32_t random;
+    float balance;
+    int crossfeed;
+    int loudness;
+    double cross_l, cross_r;
+    double rms_env;
 } Dsp;
 static double read_sample(const uint8_t *p, int encoding) {
     if(encoding==4) { float v; memcpy(&v,p,4); return isfinite(v)?v:0; }
@@ -51,6 +56,7 @@ JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env,jobject obj,jint ir,jint ic,jint
     if(ir<8000||ir>768000||ic<1||ic>8||rate<8000||rate>192000||channels<1||channels>2)return 0;
     Dsp *d=calloc(1,sizeof(*d));if(!d)return 0;
     d->in_rate=ir;d->in_channels=ic;d->in_encoding=ie;d->out_rate=rate;d->out_channels=channels;d->out_encoding=encoding;d->gain=d->target_gain=1;d->random=0x83a6c517;
+    d->rms_env=0.04;
     for(int b=0;b<10;b++)d->current[b].b0=d->target[b].b0=1;
     double cutoff=fmin(1.0,(double)rate/ir)*0.94;
     for(int phase=0;phase<PHASES;phase++) {
@@ -66,7 +72,7 @@ JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env,jobject obj,jint ir,jint ic,jint
     return (jlong)(intptr_t)d;
 }
 JNIEXPORT void JNICALL JNI(destroy)(JNIEnv *e,jobject o,jlong handle){(void)e;(void)o;free((void*)(intptr_t)handle);}
-JNIEXPORT void JNICALL JNI(dsp)(JNIEnv *env,jobject obj,jlong handle,jfloatArray frequencies,jfloatArray gains,jfloatArray qs,jfloat preamp,jboolean eq,jboolean headroom,jboolean limiter,jfloat volume) {
+JNIEXPORT void JNICALL JNI(dsp)(JNIEnv *env,jobject obj,jlong handle,jfloatArray frequencies,jfloatArray gains,jfloatArray qs,jfloat preamp,jboolean eq,jboolean headroom,jboolean limiter,jfloat volume,jfloat balance,jboolean crossfeed,jboolean loudness) {
     (void)obj; Dsp *d=(Dsp*)(intptr_t)handle;if(!d)return;
     float f[10],g[10],q[10];
     if((*env)->GetArrayLength(env,frequencies)!=10||(*env)->GetArrayLength(env,gains)!=10||(*env)->GetArrayLength(env,qs)!=10)return;
@@ -86,7 +92,10 @@ JNIEXPORT void JNICALL JNI(dsp)(JNIEnv *env,jobject obj,jlong handle,jfloatArray
     d->target_gain=pow(10,(preamp-(headroom?margin:0))/20.0)*fmax(0,fmin(1,volume));
     if(volume<=0)d->gain=0;
     d->limiter=limiter&&(eq||preamp>0);
-    d->dither=eq||preamp!=0||volume!=1||d->in_rate!=d->out_rate||sample_bytes(d->out_encoding)<sample_bytes(d->in_encoding);
+    d->balance=balance;
+    d->crossfeed=crossfeed;
+    d->loudness=loudness;
+    d->dither=eq||preamp!=0||volume!=1||balance!=0||crossfeed||loudness||d->in_rate!=d->out_rate||sample_bytes(d->out_encoding)<sample_bytes(d->in_encoding);
 }
 static double channel_sample(Dsp *d,const uint8_t *input,int frame,int channel) {
     int width=sample_bytes(d->in_encoding),ic=d->in_channels;
@@ -130,6 +139,34 @@ JNIEXPORT jint JNICALL JNI(process)(JNIEnv *env,jobject obj,jlong handle,jobject
         for(int b=0;b<10;b++) {
             double *v=(double*)&d->current[b],*target=(double*)&d->target[b];
             for(int k=0;k<5;k++)v[k]+=(target[k]-v[k])*0.001;
+        }
+        if(d->out_channels==2) {
+            if(d->balance != 0.0f) {
+                double bl = d->balance <= 0.0f ? 1.0 : (1.0 - (double)d->balance);
+                double br = d->balance >= 0.0f ? 1.0 : (1.0 + (double)d->balance);
+                samples[0] *= bl;
+                samples[1] *= br;
+            }
+            if(d->crossfeed) {
+                double alpha = 1.0 - exp(-2.0 * PI * 700.0 / d->out_rate);
+                d->cross_l += alpha * (samples[0] - d->cross_l);
+                d->cross_r += alpha * (samples[1] - d->cross_r);
+                double l_mix = samples[0] * 0.72 + d->cross_r * 0.28;
+                double r_mix = samples[1] * 0.72 + d->cross_l * 0.28;
+                samples[0] = l_mix;
+                samples[1] = r_mix;
+            }
+            if(d->loudness) {
+                double pwr = (samples[0]*samples[0] + samples[1]*samples[1]) * 0.5;
+                d->rms_env += (pwr - d->rms_env) * 0.00005;
+                if(d->rms_env > 0.0001) {
+                    double adj = sqrt(0.04 / (d->rms_env + 0.004));
+                    if(adj < 0.5) adj = 0.5;
+                    if(adj > 2.0) adj = 2.0;
+                    samples[0] *= adj;
+                    samples[1] *= adj;
+                }
+            }
         }
         for(int c=0;c<d->out_channels;c++) {
             double x=samples[c]*d->gain;

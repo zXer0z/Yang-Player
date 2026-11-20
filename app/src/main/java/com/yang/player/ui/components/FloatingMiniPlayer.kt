@@ -53,9 +53,12 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,6 +89,7 @@ fun FloatingMiniPlayer(
     outerPadding: Boolean = true
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val contentHorizontal by animateDpAsState(if (compact) 8.dp else 14.dp, tween(550), label = "miniHorizontal")
     val contentVertical by animateDpAsState(if (compact) 4.dp else 10.dp, tween(550), label = "miniVertical")
     val artworkSize by animateDpAsState(if (compact) 40.dp else 48.dp, tween(550), label = "miniArtwork")
@@ -94,12 +98,15 @@ fun FloatingMiniPlayer(
     val artistSize by animateFloatAsState(if (compact) 11f else 13f, tween(550), label = "miniArtistSize")
     val titleLineHeight by animateFloatAsState(if (compact) 17f else 24f, tween(550), label = "miniTitleLine")
     val artistLineHeight by animateFloatAsState(if (compact) 14f else 24f, tween(550), label = "miniArtistLine")
-    val imageRequest = remember(currentSong?.artworkUri) {
-        currentSong?.artworkUri?.let {
+    val imageRequest = remember(currentSong?.id, currentSong?.artworkUri, currentSong?.mediaUri) {
+        currentSong?.let { song ->
+            val data = song.artworkUri ?: song.mediaUri
             ImageRequest.Builder(context)
-                .data(it)
+                .data(data)
                 .size(140, 140)
                 .precision(Precision.INEXACT)
+                .memoryCacheKey("artwork_mini_${song.id}_$data")
+                .diskCacheKey("artwork_mini_${song.id}_$data")
                 .crossfade(true)
                 .build()
         }
@@ -120,7 +127,10 @@ fun FloatingMiniPlayer(
             .clip(RoundedCornerShape(24.dp))
             .background(if (backdropLayer == null) MiniPlayerGlass else Color.Transparent)
             .border(1.dp, MiniPlayerBorder, RoundedCornerShape(24.dp))
-            .clickable { onMiniPlayerClick() }
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onMiniPlayerClick()
+            }
     ) {
         if (backdropLayer != null) {
             // Only this sampled background layer receives the native render
@@ -140,17 +150,19 @@ fun FloatingMiniPlayer(
                     contentAlignment = Alignment.Center
                 ) {
                     // Soft diffused ambient glow behind the artwork
-                    if (imageRequest != null) {
-                        AsyncImage(
-                            model = imageRequest,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(50.dp)
-                                .blur(14.dp)
-                                .alpha(0.65f)
-                                .clip(RoundedCornerShape(14.dp)),
-                            contentScale = ContentScale.Crop
-                        )
+                    key(currentSong?.id) {
+                        if (imageRequest != null) {
+                            AsyncImage(
+                                model = imageRequest,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .blur(14.dp)
+                                    .alpha(0.65f)
+                                    .clip(RoundedCornerShape(14.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
 
                     // Sharp foreground cover art
@@ -168,13 +180,15 @@ fun FloatingMiniPlayer(
                             modifier = Modifier.size(22.dp)
                         )
 
-                        if (imageRequest != null) {
-                            AsyncImage(
-                                model = imageRequest,
-                                contentDescription = currentSong?.title,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
+                        key(currentSong?.id) {
+                            if (imageRequest != null) {
+                                AsyncImage(
+                                    model = imageRequest,
+                                    contentDescription = currentSong?.title,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         }
                     }
                 }
@@ -214,7 +228,10 @@ fun FloatingMiniPlayer(
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(
-                        onClick = onPlayPauseClick,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onPlayPauseClick()
+                        },
                         modifier = Modifier.size(42.dp)
                     ) {
                         Icon(
@@ -231,7 +248,10 @@ fun FloatingMiniPlayer(
                         exit = fadeOut(tween(180)) + shrinkHorizontally(tween(550))
                     ) {
                     IconButton(
-                        onClick = onNextClick,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onNextClick()
+                        },
                         modifier = Modifier.size(42.dp)
                     ) {
                         Icon(

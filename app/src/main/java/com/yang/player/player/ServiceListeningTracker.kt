@@ -8,10 +8,13 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.yang.player.data.ListeningHistoryStore
+import com.yang.player.data.ServerLibrary
+import java.util.concurrent.Executors
 
 /** Counts actual playing time in the service, including when the activity is closed. */
 @UnstableApi
 class ServiceListeningTracker(context: Context, private val player: Player) : Player.Listener {
+    private val appContext = context.applicationContext
     private val history = ListeningHistoryStore.get(context)
     private val handler = Handler(Looper.getMainLooper())
     private var id = ""
@@ -24,6 +27,16 @@ class ServiceListeningTracker(context: Context, private val player: Player) : Pl
     private var lastTick = SystemClock.elapsedRealtime()
     private val tick = object : Runnable { override fun run() { sample(); schedule() } }
     init { active = this; player.addListener(this); sample(); schedule() }
+
+    private fun reportCloudScrobble(mediaUri: String, submission: Boolean) {
+        val trackId = ServerLibrary.trackId(mediaUri) ?: return
+        scrobbleExecutor.execute {
+            runCatching {
+                val profile = ServerLibrary.saved(appContext) ?: return@execute
+                ServerLibrary.scrobble(profile, trackId, submission)
+            }
+        }
+    }
 
     private fun schedule() {
         handler.removeCallbacks(tick)
@@ -41,6 +54,9 @@ class ServiceListeningTracker(context: Context, private val player: Player) : Pl
             flushPending()
             id = currentId; total = 0; pending = 0; qualified = false
             position = player.currentPosition.coerceAtLeast(0)
+            if (currentId.startsWith(ServerLibrary.SCHEME) && player.isPlaying) {
+                reportCloudScrobble(currentId, submission = false)
+            }
         }
         duration = player.duration.takeIf { it > 0 } ?: player.currentMediaItem?.mediaMetadata?.extras?.getLong("yangDuration")?.takeIf { it > 0 } ?: 0L
         wasPlaying = player.isPlaying
@@ -54,6 +70,9 @@ class ServiceListeningTracker(context: Context, private val player: Player) : Pl
         val positionChanged = history.profile.value.tracks[id]?.resumePositionMs != position
         if (pending > 0 || qualifies || positionChanged) {
             history.record(id, pending, position, qualifies)
+            if (qualifies && id.startsWith(ServerLibrary.SCHEME)) {
+                reportCloudScrobble(id, submission = true)
+            }
             qualified = qualified || qualifies
             pending = 0
         }
@@ -66,6 +85,7 @@ class ServiceListeningTracker(context: Context, private val player: Player) : Pl
     }
     fun close() { flush(); handler.removeCallbacks(tick); player.removeListener(this); if (active === this) active = null }
     companion object {
+        private val scrobbleExecutor = Executors.newSingleThreadExecutor()
         private var active: ServiceListeningTracker? = null
         fun flushActive() { active?.flush() }
     }

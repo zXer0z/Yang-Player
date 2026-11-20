@@ -52,9 +52,9 @@ fun StatisticsScreen(songs: List<Song>, bottomPadding: Dp, onBack: () -> Unit, o
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", tint = accent) }
-                Text("Tu música en números", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                Text("Estadísticas", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
             }
-            Text("Historial registrado en Yang", color = Color.White.copy(alpha = .45f), fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
         }
         item {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(accent.copy(alpha = .10f)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
@@ -92,7 +92,6 @@ fun StatisticsScreen(songs: List<Song>, bottomPadding: Dp, onBack: () -> Unit, o
                 }
             }
         }
-        item { Text("Una reproducción se cuenta al escuchar 30 segundos o la mitad de una pista corta. Los rankings usan canciones reconocidas en tu biblioteca. Los totales corresponden al historial conservado en Yang.", color = Color.White.copy(alpha = .35f), fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 12.dp)) }
     }
 }
 

@@ -38,7 +38,6 @@ class YangAudioService : MediaSessionService() {
             checkpointHandler.postDelayed(this, 3000)
         }
     }
-
     companion object {
         const val CHANNEL_ID = "yang_music_playback_channel"
         const val NOTIFICATION_ID = 1001
@@ -111,7 +110,7 @@ class YangAudioService : MediaSessionService() {
             .setCallback(MediaSessionCallback())
             .build()
 
-        // 5. Player listener
+        // 5. Save the playback checkpoint
         exoPlayer.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_MEDIA_METADATA_CHANGED)) {
@@ -120,6 +119,7 @@ class YangAudioService : MediaSessionService() {
                     checkpoint.savePosition(player)
                 }
             }
+
         })
         checkpointHandler.postDelayed(savePosition, 3000)
     }

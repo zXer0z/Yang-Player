@@ -14,7 +14,11 @@ data class Song(
     val bitDepth: Int = 16,
     val isHiRes: Boolean = false,
     val isFavorite: Boolean = false,
-    val albumArtist: String = ""
+    val albumArtist: String = "",
+    val dateAdded: Long = 0L,
+    val genre: String = "",
+    val trackNumber: Int = 0,
+    val discNumber: Int = 1
 ) {
     val isOnline: Boolean get() = mediaUri.startsWith("yangyoutube://")
     // Evaluated once at object creation - avoids Formatter/Regex overhead during 120fps fling

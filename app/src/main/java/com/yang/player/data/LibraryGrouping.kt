@@ -13,6 +13,14 @@ class LibraryGrouping(songs: List<Song>) {
     private val credits = ArtistCredits(library.flatMap { listOf(it.artist, it.albumArtist) })
     private val keys = library.associate { it.id to albumIdentity(it) }
     val albumTracks: Map<String, List<Song>> = library.groupBy { keys.getValue(it.id) }
+        .mapValues { (_, tracks) ->
+            tracks.sortedWith(
+                compareBy<Song> { it.discNumber.coerceAtLeast(1) }
+                    .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
+                    .thenBy { it.dataPath }
+                    .thenBy { normalized(it.title) }
+            )
+        }
     val albums: List<Album> = albumTracks.mapNotNull { (key, tracks) ->
         val first = tracks.first()
         if (!knownAlbum(first.album)) return@mapNotNull null

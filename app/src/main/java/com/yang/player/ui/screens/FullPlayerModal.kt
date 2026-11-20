@@ -2,6 +2,7 @@ package com.yang.player.ui.screens
 
 import android.content.Context
 import android.media.AudioManager
+import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
@@ -19,6 +20,9 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -93,8 +97,10 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -120,9 +126,14 @@ import com.yang.player.ui.components.ArtworkAtmosphere
 import com.yang.player.ui.components.LyricsPane
 import com.yang.player.ui.components.QueuePane
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 import kotlin.math.absoluteValue
 
@@ -135,8 +146,10 @@ fun FullPlayerModal(
     nextSong: Song? = null,
     previousSong: Song? = null,
     isPlaying: Boolean,
-    progress: Float,
-    currentPositionMs: Long,
+    progress: Float = 0f,
+    currentPositionMs: Long = 0L,
+    playbackProgress: StateFlow<Float>? = null,
+    playbackPositionMs: StateFlow<Long>? = null,
     durationMs: Long,
     isFavorite: Boolean = false,
     isShuffle: Boolean = false,
@@ -153,7 +166,11 @@ fun FullPlayerModal(
     onQueueMove: (Int, Int) -> Unit = { _, _ -> },
     onToggleFavorite: (Song) -> Unit = {},
     onPlayNext: (Song) -> Unit = {},
-    onAddToQueue: (Song) -> Unit = {}
+    onAddToQueue: (Song) -> Unit = {},
+    onStartRadio: ((Song) -> Unit)? = null,
+    cloudPlaylists: List<com.yang.player.data.CloudPlaylistSummary> = emptyList(),
+    onCreateCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
+    onAddToCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
 ) {
     if (song == null) return
 
@@ -166,9 +183,12 @@ fun FullPlayerModal(
 
     val yin by remember { YinConnector.get(context) }.state.collectAsState()
     val yinConnected = yin.ready
+    val appearancePrefs = remember { com.yang.player.data.AppearancePreferences.get(context) }
+    val appearanceConfig by appearancePrefs.config.collectAsState()
+    val beatActive = yinConnected || (appearanceConfig.beatReactiveAtmosphere && appearanceConfig.themeMode == com.yang.player.data.ThemeMode.DYNAMIC)
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle, yinConnected, isPlaying, showLyrics, showQueue) {
-        if (yinConnected && isPlaying && !showLyrics && !showQueue) {
+    LaunchedEffect(lifecycle, beatActive, isPlaying, showLyrics, showQueue) {
+        if (beatActive && isPlaying && !showLyrics && !showQueue) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { MusicSpectrum.observe() }
         }
     }
@@ -198,34 +218,50 @@ fun FullPlayerModal(
         pageCount = { totalPages }
     )
 
+    val latestIndex by rememberUpdatedState(effectiveIndex)
+    val latestQueueSelect by rememberUpdatedState(onQueueSelect)
+    val latestPaneOpen by rememberUpdatedState(showQueue || showLyrics)
+    var syncingArtwork by remember(pagerState) { mutableStateOf(false) }
+
     // Sync pager when song/index changes externally (e.g. from buttons or auto-next)
     LaunchedEffect(effectiveIndex, song.id, effectiveQueue.size) {
         if (isLoopable) {
             val currentMod = pagerState.currentPage % effectiveQueue.size
             if (currentMod != effectiveIndex && !pagerState.isScrollInProgress) {
-                val diff = effectiveIndex - currentMod
+                var diff = (effectiveIndex - currentMod) % effectiveQueue.size
+                if (diff > effectiveQueue.size / 2) diff -= effectiveQueue.size
+                else if (diff < -effectiveQueue.size / 2) diff += effectiveQueue.size
                 val targetPage = pagerState.currentPage + diff
-                if (abs(diff) <= 2) {
-                    pagerState.animateScrollToPage(targetPage, animationSpec = tween(260, easing = FastOutSlowInEasing))
-                } else {
-                    pagerState.scrollToPage(targetPage)
+                syncingArtwork = true
+                try {
+                    if (abs(diff) <= 2) {
+                        pagerState.animateScrollToPage(targetPage, animationSpec = tween(260, easing = FastOutSlowInEasing))
+                    } else {
+                        pagerState.scrollToPage(targetPage)
+                    }
+                } finally {
+                    syncingArtwork = false
                 }
             }
         }
     }
 
-    // When the user swipes and the pager settles on a page, notify playback
-    LaunchedEffect(pagerState.settledPage) {
-        if (isLoopable && !showQueue && !showLyrics) {
-            val settledIndex = pagerState.settledPage % effectiveQueue.size
-            if (settledIndex != effectiveIndex && settledIndex in effectiveQueue.indices) {
-                onQueueSelect(settledIndex)
+    // When the user swipes and the pager settles on a page, notify playback after scroll completely finishes
+    LaunchedEffect(pagerState, isLoopable, effectiveQueue.size) {
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.settledPage }
+            .collect { (inProgress, currentPage) ->
+                if (!inProgress && isLoopable && !latestPaneOpen && !syncingArtwork) {
+                    val settledIndex = currentPage % effectiveQueue.size
+                    if (settledIndex != latestIndex && settledIndex in effectiveQueue.indices) {
+                        latestQueueSelect(settledIndex)
+                    }
+                }
             }
-        }
     }
 
     val handleNext = onNext
     val handlePrevious = onPrevious
+    val haptic = LocalHapticFeedback.current
 
     // Hardware volume control via AudioManager
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -255,15 +291,16 @@ fun FullPlayerModal(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            ArtworkAtmosphere(palette, moving = !yinConnected)
-            if (yinConnected && !showLyrics && !showQueue) {
+            ArtworkAtmosphere(palette, moving = !beatActive)
+            if (beatActive && !showLyrics && !showQueue) {
                 YinBeatAtmosphere(isPlaying, androidx.compose.ui.graphics.lerp(palette.topColor, palette.accentColor, .25f))
             }
 
             if (showLyrics) {
+                val liveLyricsPosition = playbackPositionMs?.collectAsState()?.value ?: currentPositionMs
                 LyricsPane(
                     song = song,
-                    positionMs = currentPositionMs,
+                    positionMs = liveLyricsPosition,
                     isPlaying = isPlaying,
                     onClose = { showLyrics = false },
                     onSeek = onSeek,
@@ -293,12 +330,13 @@ fun FullPlayerModal(
                     .padding(top = 10.dp, bottom = 14.dp),
                 contentAlignment = Alignment.TopCenter
             ) {
+                val scrollState = rememberScrollState()
                 PlayerLayout(
                     viewportHeight = maxHeight,
                     modifier = Modifier
                         .widthIn(max = 420.dp)
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(scrollState, enabled = scrollState.maxValue > 0),
                     handle = {
                     // Top sheet grabber pill
                     Box(
@@ -310,6 +348,7 @@ fun FullPlayerModal(
 
                     },
                     artwork = {
+                        val currentArtworkStyle = appearanceConfig.artworkStyle
                         if (isLoopable) {
                             HorizontalPager(
                                 state = pagerState,
@@ -333,13 +372,29 @@ fun FullPlayerModal(
                                         },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (yinConnected) YinVinylArtwork(pageSong, isPlaying && pageSong.id == song.id, palette.waveColors)
-                                    else ArtworkCard(song = pageSong)
+                                    if (yinConnected && currentArtworkStyle == com.yang.player.data.ArtworkStyle.VINYL_RECORD) {
+                                        YinVinylArtwork(pageSong, isPlaying && pageSong.id == song.id, palette.waveColors)
+                                    } else {
+                                        com.yang.player.ui.components.PlayerArtworkView(
+                                            song = pageSong,
+                                            isPlaying = isPlaying && pageSong.id == song.id,
+                                            style = currentArtworkStyle,
+                                            palette = palette
+                                        )
+                                    }
                                 }
                             }
                         } else {
-                            if (yinConnected) YinVinylArtwork(song, isPlaying, palette.waveColors)
-                            else ArtworkCard(song = song)
+                            if (yinConnected && currentArtworkStyle == com.yang.player.data.ArtworkStyle.VINYL_RECORD) {
+                                YinVinylArtwork(song, isPlaying, palette.waveColors)
+                            } else {
+                                com.yang.player.ui.components.PlayerArtworkView(
+                                    song = song,
+                                    isPlaying = isPlaying,
+                                    style = currentArtworkStyle,
+                                    palette = palette
+                                )
+                            }
                         }
                     },
                     controls = {
@@ -349,33 +404,22 @@ fun FullPlayerModal(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Text follows exactly the same position as the artwork; there is no second transition.
-                        val titlePage by remember(pagerState) { derivedStateOf { pagerState.currentPage } }
-                        Box(Modifier.weight(1f).padding(end = 14.dp).heightIn(min = 56.dp).clipToBounds(),
-                            contentAlignment = Alignment.CenterStart) {
-                            val pages = if (isLoopable) (titlePage - 1..titlePage + 1).filter { it in 0 until totalPages } else listOf(0)
-                            pages.forEach { page -> key(page) {
-                                val targetSong = effectiveQueue[page % effectiveQueue.size]
-                                Column(Modifier.fillMaxWidth().graphicsLayer {
-                                    val offset = if (isLoopable) (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction else 0f
-                                    translationX = offset * size.width
-                                    alpha = (1f - abs(offset)).coerceIn(0f, 1f)
-                                }) {
-                                    Text(targetSong.title, color = Color.White, fontSize = 21.sp,
-                                        fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp, maxLines = 1,
-                                        modifier = Modifier.basicMarquee(iterations = if (!pagerState.isScrollInProgress && page == pagerState.settledPage) 3 else 0))
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(targetSong.artist, color = Color.White.copy(alpha = 0.68f), fontSize = 18.sp,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            } }
-                        }
+                        TrackMetadataPager(
+                            effectiveQueue = effectiveQueue,
+                            isLoopable = isLoopable,
+                            totalPages = totalPages,
+                            pagerState = pagerState,
+                            modifier = Modifier.weight(1f).padding(end = 14.dp)
+                        )
 
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            CircleGlassButton(onClick = { onToggleFavorite(song) }) {
+                            CircleGlassButton(onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleFavorite(song)
+                            }) {
                                 Icon(
                                     imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                                     contentDescription = "Favorito",
@@ -397,102 +441,17 @@ fun FullPlayerModal(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // 3. Smooth Pill Progress Bar (expands on scrub, no protruding thumb) + Timestamps
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        var isSeeking by remember { mutableStateOf(false) }
-                        var seekFraction by remember { mutableFloatStateOf(0f) }
-                        val currentFraction = (if (isSeeking) seekFraction else progress).coerceIn(0f, 1f)
-                        val barHeight by animateDpAsState(
-                            targetValue = if (isSeeking) 11.dp else 6.dp,
-                            animationSpec = tween(160),
-                            label = "seekBarHeight"
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(22.dp)
-                                .pointerInput(durationMs) {
-                                    detectTapGestures { offset ->
-                                        val frac = (offset.x / size.width).coerceIn(0f, 1f)
-                                        onSeek((frac * durationMs).toLong())
-                                    }
-                                }
-                                .pointerInput(durationMs) {
-                                    detectHorizontalDragGestures(
-                                        onDragStart = { offset ->
-                                            isSeeking = true
-                                            seekFraction = (offset.x / size.width).coerceIn(0f, 1f)
-                                        },
-                                        onDragEnd = {
-                                            onSeek((seekFraction * durationMs).toLong())
-                                            isSeeking = false
-                                        },
-                                        onDragCancel = { isSeeking = false },
-                                        onHorizontalDrag = { change, _ ->
-                                            change.consume()
-                                            seekFraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                                        }
-                                    )
-                                },
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(barHeight)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.24f))
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(currentFraction)
-                                        .fillMaxHeight()
-                                        .clip(CircleShape)
-                                        .background(if (yinConnected && !isSeeking) palette.accentColor.copy(alpha = .62f) else Color.White.copy(alpha = if (isSeeking) 0.98f else 0.82f))
-                                ) {
-                                    if (yinConnected && !isSeeking) PlayerBarShimmer(palette.accentColor, Modifier.fillMaxSize())
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        // Timestamps row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val curSec = if (isSeeking) {
-                                (seekFraction * durationMs / 1000).toLong()
-                            } else {
-                                currentPositionMs / 1000
-                            }
-                            val remSec = (durationMs / 1000 - curSec).coerceAtLeast(0)
-
-                            Text(
-                                text = String.format("%d:%02d", curSec / 60, curSec % 60),
-                                color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = song.audioQualityBadge,
-                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                                textAlign = TextAlign.Center,
-                                color = Color.White.copy(alpha = 0.68f),
-                                fontSize = 10.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = String.format("-%d:%02d", remSec / 60, remSec % 60),
-                                color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
+                    PlayerProgressBar(
+                        progress = progress,
+                        currentPositionMs = currentPositionMs,
+                        playbackProgress = playbackProgress,
+                        playbackPositionMs = playbackPositionMs,
+                        durationMs = durationMs,
+                        audioQualityBadge = song.audioQualityBadge,
+                        yinConnected = yinConnected,
+                        accentColor = palette.accentColor,
+                        onSeek = onSeek
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -504,20 +463,23 @@ fun FullPlayerModal(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { handlePrevious() },
+                        PlayerNavButton(
+                            icon = Icons.Rounded.FastRewind,
+                            contentDescription = "Anterior",
+                            accentColor = palette.accentColor,
+                            onSkip = handlePrevious,
+                            onSeekStep = { step ->
+                                val cur = playbackPositionMs?.value ?: currentPositionMs
+                                onSeek((cur - step).coerceAtLeast(0L))
+                            },
                             modifier = Modifier.size(68.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.FastRewind,
-                                contentDescription = "Anterior",
-                                tint = Color.White,
-                                modifier = Modifier.size(50.dp)
-                            )
-                        }
+                        )
 
                         IconButton(
-                            onClick = onPlayPause,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onPlayPause()
+                            },
                             modifier = Modifier.size(80.dp).semantics {
                                 contentDescription = if (isPlaying) "Pausar" else "Reproducir"
                             }
@@ -550,17 +512,17 @@ fun FullPlayerModal(
                             }
                         }
 
-                        IconButton(
-                            onClick = { handleNext() },
+                        PlayerNavButton(
+                            icon = Icons.Rounded.FastForward,
+                            contentDescription = "Siguiente",
+                            accentColor = palette.accentColor,
+                            onSkip = handleNext,
+                            onSeekStep = { step ->
+                                val cur = playbackPositionMs?.value ?: currentPositionMs
+                                onSeek((cur + step).coerceAtMost(durationMs))
+                            },
                             modifier = Modifier.size(68.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.FastForward,
-                                contentDescription = "Siguiente",
-                                tint = Color.White,
-                                modifier = Modifier.size(50.dp)
-                            )
-                        }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -654,7 +616,10 @@ fun FullPlayerModal(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { showLyrics = true }, modifier = Modifier.size(48.dp)) {
+                        IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showLyrics = true
+                        }, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 imageVector = Icons.Outlined.ChatBubbleOutline,
                                 contentDescription = "Letras",
@@ -690,7 +655,10 @@ fun FullPlayerModal(
                         }
 
                         IconButton(
-                            onClick = { showQueue = true },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                showQueue = true
+                            },
                             modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
@@ -715,6 +683,10 @@ fun FullPlayerModal(
             onPlayNext = onPlayNext,
             onAddToQueue = onAddToQueue,
             onToggleFavorite = { onToggleFavorite(it) },
+            onStartRadio = onStartRadio,
+            cloudPlaylists = cloudPlaylists,
+            onCreateCloudPlaylist = onCreateCloudPlaylist,
+            onAddToCloudPlaylist = onAddToCloudPlaylist,
             playbackControls = { com.yang.player.ui.components.PlaybackModesRow(isShuffle, repeatMode, onShuffle, onRepeat) }
         )
     }
@@ -799,7 +771,7 @@ private fun ArtworkCard(
                 .data(song.artworkUri ?: song.mediaUri)
                 .size(700, 700)
                 .precision(Precision.INEXACT)
-                .allowHardware(false)
+                .allowHardware(true)
                 .crossfade(false)
                 .memoryCacheKey("artwork_${song.id}_${song.artworkUri ?: song.mediaUri}")
                 .diskCacheKey("artwork_${song.id}_${song.artworkUri ?: song.mediaUri}")
@@ -819,22 +791,17 @@ private fun ArtworkCard(
             ),
         contentAlignment = Alignment.Center
     ) {
-        var isLoaded by remember(song?.id, song?.artworkUri) { mutableStateOf(false) }
-
-        if (!isLoaded) {
-            Icon(
-                imageVector = Icons.Rounded.MusicNote,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.22f),
-                modifier = Modifier.size(72.dp)
-            )
-        }
+        Icon(
+            imageVector = Icons.Rounded.MusicNote,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.22f),
+            modifier = Modifier.size(72.dp)
+        )
 
         if (artworkRequest != null && song != null) {
             AsyncImage(
                 model = artworkRequest,
                 contentDescription = song.title,
-                onSuccess = { isLoaded = true },
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
@@ -842,3 +809,231 @@ private fun ArtworkCard(
     }
 }
 
+@Composable
+private fun TrackMetadataPager(
+    effectiveQueue: List<Song>,
+    isLoopable: Boolean,
+    totalPages: Int,
+    pagerState: PagerState,
+    modifier: Modifier = Modifier
+) {
+    val titlePage by remember(pagerState) { derivedStateOf { pagerState.currentPage } }
+    Box(
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .clipToBounds(),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        val pages = if (isLoopable) {
+            (titlePage - 1..titlePage + 1).filter { it in 0 until totalPages }
+        } else {
+            listOf(0)
+        }
+        pages.forEach { page ->
+            key(page) {
+                val targetSong = effectiveQueue[page % effectiveQueue.size]
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            val offset = if (isLoopable) (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction else 0f
+                            translationX = offset * size.width
+                            alpha = (1f - abs(offset)).coerceIn(0f, 1f)
+                        }
+                ) {
+                    val isCurrentSettled = !pagerState.isScrollInProgress && page == pagerState.settledPage
+                    Text(
+                        text = targetSong.title,
+                        color = Color.White,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.2).sp,
+                        maxLines = 1,
+                        modifier = if (isCurrentSettled) Modifier.basicMarquee(iterations = 3) else Modifier
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = targetSong.artist,
+                        color = Color.White.copy(alpha = 0.68f),
+                        fontSize = 18.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerProgressBar(
+    progress: Float,
+    currentPositionMs: Long,
+    playbackProgress: StateFlow<Float>?,
+    playbackPositionMs: StateFlow<Long>?,
+    durationMs: Long,
+    audioQualityBadge: String,
+    yinConnected: Boolean,
+    accentColor: Color,
+    onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val liveProgress = playbackProgress?.collectAsState()?.value ?: progress
+    val livePositionMs = playbackPositionMs?.collectAsState()?.value ?: currentPositionMs
+
+    var isSeeking by remember { mutableStateOf(false) }
+    var seekFraction by remember { mutableFloatStateOf(0f) }
+    val currentFraction = (if (isSeeking) seekFraction else liveProgress).coerceIn(0f, 1f)
+    val barHeight by animateDpAsState(
+        targetValue = if (isSeeking) 11.dp else 6.dp,
+        animationSpec = tween(160),
+        label = "seekBarHeight"
+    )
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(22.dp)
+                .pointerInput(durationMs) {
+                    detectTapGestures { offset ->
+                        val frac = (offset.x / size.width).coerceIn(0f, 1f)
+                        onSeek((frac * durationMs).toLong())
+                    }
+                }
+                .pointerInput(durationMs) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            isSeeking = true
+                            seekFraction = (offset.x / size.width).coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            onSeek((seekFraction * durationMs).toLong())
+                            isSeeking = false
+                        },
+                        onDragCancel = { isSeeking = false },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            seekFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                        }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(barHeight)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.24f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(currentFraction)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .background(
+                            if (yinConnected && !isSeeking) accentColor.copy(alpha = .62f)
+                            else Color.White.copy(alpha = if (isSeeking) 0.98f else 0.82f)
+                        )
+                ) {
+                    if (yinConnected && !isSeeking) PlayerBarShimmer(accentColor, Modifier.fillMaxSize())
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Timestamps row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val curSec = if (isSeeking) {
+                (seekFraction * durationMs / 1000).toLong()
+            } else {
+                livePositionMs / 1000
+            }
+            val remSec = (durationMs / 1000 - curSec).coerceAtLeast(0)
+
+            Text(
+                text = String.format("%d:%02d", curSec / 60, curSec % 60),
+                color = Color.White.copy(alpha = 0.55f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = audioQualityBadge,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                textAlign = TextAlign.Center,
+                color = Color.White.copy(alpha = 0.68f),
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = String.format("-%d:%02d", remSec / 60, remSec % 60),
+                color = Color.White.copy(alpha = 0.55f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerNavButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    accentColor: Color,
+    onSkip: () -> Unit,
+    onSeekStep: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    var isSeeking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Box(
+        modifier = modifier
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var isLongPress = false
+
+                    val waitJob = scope.launch {
+                        delay(350)
+                        isLongPress = true
+                        isSeeking = true
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        var stepCount = 0
+                        while (isActive) {
+                            stepCount++
+                            val step = if (stepCount > 8) 6000L else if (stepCount > 4) 4500L else 3000L
+                            onSeekStep(step)
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            delay(140)
+                        }
+                    }
+
+                    val upOrCancel = waitForUpOrCancellation()
+                    waitJob.cancel()
+                    isSeeking = false
+
+                    if (upOrCancel != null && !isLongPress) {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSkip()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (isSeeking) accentColor else Color.White,
+            modifier = Modifier.size(50.dp)
+        )
+    }
+}

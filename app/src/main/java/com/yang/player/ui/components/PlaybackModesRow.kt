@@ -12,7 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
@@ -28,17 +30,24 @@ fun PlaybackModesRow(shuffle: Boolean, repeatMode: Int, onShuffle: () -> Unit, o
     val timer by SleepTimerStore.state.collectAsState()
     val context = LocalContext.current
     val accent = LocalArtworkAccent.current
+    val haptic = LocalHapticFeedback.current
     var showTimer by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Text("Reproducción", color = Color.White.copy(alpha = .4f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
-        TextButton(onClick = onShuffle, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) {
+        TextButton(onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onShuffle()
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Shuffle, null, tint = accent); Spacer(Modifier.width(18.dp))
                 Text("Aleatorio", color = Color.White, modifier = Modifier.weight(1f))
                 Text(if (shuffle) "Activado" else "Desactivado", color = accent, fontSize = 12.sp)
             }
         }
-        TextButton(onClick = onRepeat, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) {
+        TextButton(onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onRepeat()
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null, tint = accent)
                 Spacer(Modifier.width(18.dp)); Text("Repetición", color = Color.White, modifier = Modifier.weight(1f))

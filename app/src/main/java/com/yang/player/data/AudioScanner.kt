@@ -6,31 +6,41 @@ import android.net.Uri
 import android.provider.MediaStore
 import com.yang.player.model.AudioFormat
 import com.yang.player.model.Song
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class AudioScanner(private val context: Context) {
 
-    private val scannerScope = CoroutineScope(Dispatchers.IO)
-
     // Directories that strictly contain non-music voice notes or system alerts
     private val voiceNoteKeywords = listOf(
         "whatsapp",
+        "com.whatsapp",
+        "com.whatsapp.w4b",
+        "whatsapp audio",
+        "whatsapp voice",
+        "voice notes",
+        "voicenotes",
+        ".statuses",
+        "telegram/telegram audio",
         "telegram audio",
+        "telegram documents",
+        "telegram/telegram documents",
         "recordings",
         "sound_recorder",
         "voice_recorder",
+        "voicerecorder",
         "call_recordings",
+        "call_recorder",
+        "audiorecorder",
+        "soundrecorder",
         "notifications",
         "ringtones",
         "alarms"
     )
 
     private val voiceNotePrefixes = listOf(
-        "aud-", "ptt-", "rec-", "voice-"
+        "aud-", "ptt-", "rec-", "voice-", "audio_", "recording_", "call_", "voicenote_", "vm_"
     )
 
     suspend fun scanLocalAudio(): List<Song> = withContext(Dispatchers.IO) {
@@ -43,9 +53,17 @@ class AudioScanner(private val context: Context) {
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.DATA,
             MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.Audio.Media.DATE_ADDED,
             MediaStore.Audio.Media.DATE_MODIFIED,
-            MediaStore.Audio.Media.SIZE
-        ).let { if (android.os.Build.VERSION.SDK_INT >= 30) it + MediaStore.Audio.Media.ALBUM_ARTIST else it }
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.TRACK
+        ).let { cols ->
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                cols + arrayOf(MediaStore.Audio.Media.ALBUM_ARTIST, MediaStore.Audio.Media.GENRE)
+            } else {
+                cols
+            }
+        }
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 " +
                 "AND (${MediaStore.Audio.Media.IS_RINGTONE} == 0) " +
@@ -73,11 +91,14 @@ class AudioScanner(private val context: Context) {
                 val artistColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val albumColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val albumArtistColumn = it.getColumnIndex("album_artist")
+                val genreColumn = it.getColumnIndex("genre")
                 val durationColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val dataColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
                 val mimeColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+                val addedColumn = it.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
                 val modifiedColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_MODIFIED)
                 val sizeColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                val trackColumn = it.getColumnIndex(MediaStore.Audio.Media.TRACK)
 
                 while (it.moveToNext()) {
                     val durationMs = it.getLong(durationColumn)
@@ -88,26 +109,25 @@ class AudioScanner(private val context: Context) {
                     val mimeType = it.getString(mimeColumn)
                     val format = AudioFormat.fromPathOrMime(dataPath, mimeType)
 
-                    if (format == AudioFormat.UNKNOWN) continue
+                    if (format == AudioFormat.UNKNOWN && mimeType?.startsWith("audio/") != true) continue
 
-                    val isLosslessMusic = format in listOf(
-                        AudioFormat.FLAC,
-                        AudioFormat.DSD,
-                        AudioFormat.ALAC,
-                        AudioFormat.WAV
-                    )
+                    val isLosslessMusic = format.isLossless
 
-                    // Lossless audiophile files are ALWAYS kept (never filtered)
-                    if (!isLosslessMusic) {
-                        val isVoiceNoteDir = voiceNoteKeywords.any { kw -> normalizedPath.contains(kw) }
-                        if (isVoiceNoteDir) continue
+                    // Always reject voice notes, notifications and messaging media dumps
+                    val isVoiceNoteDir = voiceNoteKeywords.any { kw -> normalizedPath.contains(kw) }
+                    if (isVoiceNoteDir) continue
 
-                        val filename = dataPath.substringAfterLast('/').lowercase()
-                        val isVoiceNotePrefix = voiceNotePrefixes.any { p -> filename.startsWith(p) }
-                        if (isVoiceNotePrefix) continue
-                    } else {
-                        // Even for lossless, ignore WhatsApp voice dumps
-                        if (normalizedPath.contains("com.whatsapp") || normalizedPath.contains("whatsapp audio")) {
+                    val filename = dataPath.substringAfterLast('/').lowercase()
+                    val isVoiceNotePrefix = voiceNotePrefixes.any { p -> filename.startsWith(p) }
+                    if (isVoiceNotePrefix) continue
+
+                    // Ignore files if directory has a .nomedia marker
+                    val parentFile = if (dataPath.isNotBlank()) File(dataPath).parentFile else null
+                    if (parentFile != null && File(parentFile, ".nomedia").exists()) continue
+
+                    // Extra protection against short messaging dumps (< 40s)
+                    if (!isLosslessMusic && durationMs < 40000 && (normalizedPath.contains("media") || normalizedPath.contains("cache"))) {
+                        if (filename.startsWith("aud") || filename.startsWith("ptt") || filename.startsWith("rec") || filename.startsWith("voice")) {
                             continue
                         }
                     }
@@ -156,6 +176,15 @@ class AudioScanner(private val context: Context) {
                         contentUri
                     }
 
+                    val rawAdded = if (addedColumn >= 0) it.getLong(addedColumn) else 0L
+                    val rawModified = it.getLong(modifiedColumn)
+                    val fileSec = if (rawAdded > 0L) rawAdded else rawModified
+                    val dateAddedMs = if (fileSec < 10_000_000_000L) fileSec * 1000L else fileSec
+
+                    val rawTrack = if (trackColumn >= 0) it.getInt(trackColumn) else 0
+                    val discNumber = if (rawTrack >= 1000) rawTrack / 1000 else 1
+                    val trackNumber = if (rawTrack >= 1000) rawTrack % 1000 else rawTrack
+
                     songsList.add(
                         Song(
                             id = id.toString(),
@@ -171,7 +200,11 @@ class AudioScanner(private val context: Context) {
                             bitDepth = bitDepth,
                             isHiRes = sampleRate > 48000 || bitDepth > 16,
                             isFavorite = false,
-                            albumArtist = if (albumArtistColumn >= 0) it.getString(albumArtistColumn).orEmpty().trim() else ""
+                            albumArtist = if (albumArtistColumn >= 0) it.getString(albumArtistColumn).orEmpty().trim() else "",
+                            dateAdded = dateAddedMs,
+                            genre = if (genreColumn >= 0) it.getString(genreColumn).orEmpty().trim() else "",
+                            trackNumber = trackNumber,
+                            discNumber = discNumber
                         )
                     )
                 }
@@ -181,14 +214,6 @@ class AudioScanner(private val context: Context) {
         }
 
         metadata.save()
-        // Asynchronously pre-warm L1/L2 cover art cache in background
-        if (songsList.isNotEmpty()) {
-            val songsCopy = ArrayList(songsList)
-            scannerScope.launch {
-                AudioCoverFetcher.preWarmCache(context, songsCopy)
-            }
-        }
-
         songsList
     }
 }

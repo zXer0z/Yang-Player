@@ -49,10 +49,29 @@ class OnlineMetadata private constructor(private val context: Context) {
         if (song.isOnline) return song
         val raw = prefs.getString(key(song), null) ?: return song
         val saved = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
-        fun fill(original: String, field: String) = if (missing(original)) saved.optString(field).ifBlank { original } else original
+        val customTitle = saved.optString("title").takeIf { it.isNotBlank() } ?: song.title
+        val customArtist = saved.optString("artist").takeIf { it.isNotBlank() } ?: song.artist
+        val customAlbum = saved.optString("album").takeIf { it.isNotBlank() } ?: song.album
         val cover = saved.optString("artwork").takeIf { it.isNotBlank() && File(it).isFile }
-        return song.copy(title = fill(song.title, "title"), artist = fill(song.artist, "artist"),
-            album = fill(song.album, "album"), artworkUri = cover?.let { Uri.fromFile(File(it)).toString() } ?: song.artworkUri)
+        return song.copy(
+            title = customTitle,
+            artist = customArtist,
+            album = customAlbum,
+            artworkUri = cover?.let { Uri.fromFile(File(it)).toString() } ?: song.artworkUri
+        )
+    }
+
+    fun hasCustomArtwork(song: Song): Boolean {
+        if (song.isOnline) return false
+        val raw = prefs.getString(key(song), null) ?: return false
+        val saved = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+        val cover = saved.optString("artwork")
+        return cover.isNotBlank() && File(cover).isFile
+    }
+
+    fun hasCustomChanges(song: Song): Boolean {
+        if (song.isOnline) return false
+        return prefs.contains(key(song))
     }
 
     suspend fun hasArtwork(song: Song): Boolean = withContext(Dispatchers.IO) {
@@ -68,7 +87,9 @@ class OnlineMetadata private constructor(private val context: Context) {
         try {
             reader.setDataSource(context, Uri.parse(song.mediaUri))
             reader.embeddedPicture?.isNotEmpty() == true
-        } finally { reader.release() }
+        } catch (_: Exception) {
+            false
+        } finally { runCatching { reader.release() } }
     }
 
     suspend fun search(query: String, kind: CompletionKind, song: Song): List<MetadataMatch> = withContext(Dispatchers.IO) {
@@ -96,43 +117,112 @@ class OnlineMetadata private constructor(private val context: Context) {
         }.distinctBy { it.id }.sortedBy { if (song.durationMs > 0 && it.durationMs > 0) abs(song.durationMs - it.durationMs) else Long.MAX_VALUE }
     }
 
+    suspend fun saveCustomTags(
+        song: Song,
+        title: String,
+        artist: String,
+        album: String,
+        artworkUriOrUrl: String? = null,
+        removeArtwork: Boolean = false
+    ): String = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            require(!song.isOnline) { "Esta opción es para canciones locales." }
+            val k = key(song)
+            val saved = JSONObject(prefs.getString(k, "{}")!!)
+            if (title.isNotBlank()) saved.put("title", title.trim())
+            if (artist.isNotBlank()) saved.put("artist", artist.trim())
+            if (album.isNotBlank()) saved.put("album", album.trim())
+
+            if (removeArtwork) {
+                val file = File(context.filesDir, "completed_artwork/$k.jpg")
+                if (file.exists()) file.delete()
+                saved.remove("artwork")
+            } else if (!artworkUriOrUrl.isNullOrBlank()) {
+                val existingArtwork = saved.optString("artwork")
+                val isSameLocal = existingArtwork.isNotBlank() && (artworkUriOrUrl == existingArtwork || artworkUriOrUrl == Uri.fromFile(File(existingArtwork)).toString())
+                if (!isSameLocal) {
+                    val file = File(context.filesDir, "completed_artwork/$k.jpg")
+                    file.parentFile?.mkdirs()
+                    val bytes: ByteArray = if (artworkUriOrUrl.startsWith("http://") || artworkUriOrUrl.startsWith("https://")) {
+                        fetch(artworkUriOrUrl, 8 * 1024 * 1024, artwork = true)
+                    } else {
+                        val parsed = Uri.parse(artworkUriOrUrl)
+                        context.contentResolver.openInputStream(parsed)?.use { it.readBytes() }
+                            ?: error("No se pudo leer la imagen seleccionada.")
+                    }
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096) { "La imagen no es válida." }
+                    writeAtomic(file, bytes)
+                    saved.put("artwork", file.absolutePath)
+                }
+            }
+
+            require(prefs.edit().putString(k, saved.toString()).commit()) { "No se pudieron guardar los datos." }
+            revision.value++
+            "Cambios guardados en Yang."
+        }
+    }
+
+    suspend fun resetToOriginal(song: Song): String = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            val k = key(song)
+            val file = File(context.filesDir, "completed_artwork/$k.jpg")
+            if (file.exists()) file.delete()
+            prefs.edit().remove(k).commit()
+            revision.value++
+            "Etiquetas restablecidas a las originales."
+        }
+    }
+
+    suspend fun saveLyrics(song: Song, text: String): String = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            LyricsRepository(context).saveOnline(song, text)
+            revision.value++
+            "Letra guardada en Yang."
+        }
+    }
+
+    suspend fun removeLyrics(song: Song): String = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            LyricsRepository(context).removeLyrics(song)
+            revision.value++
+            "Letra eliminada."
+        }
+    }
+
     suspend fun save(song: Song, match: MetadataMatch, kind: CompletionKind): String = writeLock.withLock {
         withContext(Dispatchers.IO) {
             require(!song.isOnline) { "Esta opción es para canciones locales." }
-            val current = apply(song)
-            val saved = JSONObject(prefs.getString(key(song), "{}")!!)
+            val k = key(song)
+            val saved = JSONObject(prefs.getString(k, "{}")!!)
             val message = when (kind) {
                 CompletionKind.METADATA -> {
-                    var count = 0
-                    listOf(Triple("title", current.title, match.title), Triple("artist", current.artist, match.artist),
-                        Triple("album", current.album, match.album)).forEach { (field, old, value) ->
-                        if (missing(old) && value.isNotBlank()) { saved.put(field, value); count++ }
-                    }
-                    require(count > 0) { "Título, artista y álbum ya tienen datos. Se conservaron." }
-                    "$count campos completados en Yang."
+                    if (match.title.isNotBlank()) saved.put("title", match.title.trim())
+                    if (match.artist.isNotBlank()) saved.put("artist", match.artist.trim())
+                    if (match.album.isNotBlank()) saved.put("album", match.album.trim())
+                    "Datos actualizados en Yang."
                 }
                 CompletionKind.ARTWORK -> {
-                    require(!hasArtwork(current)) { "Esta canción ya tiene carátula. Se conservó." }
                     require(match.artwork.isNotBlank()) { "Este resultado no tiene carátula." }
                     val bytes = fetch(match.artwork, 8 * 1024 * 1024, artwork = true)
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                     require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096) { "La imagen recibida no es válida." }
-                    val file = File(context.filesDir, "completed_artwork/${key(song)}.jpg")
-                    file.parentFile!!.mkdirs()
+                    val file = File(context.filesDir, "completed_artwork/$k.jpg")
+                    file.parentFile?.mkdirs()
                     writeAtomic(file, bytes)
                     saved.put("artwork", file.absolutePath)
                     "Carátula guardada en Yang."
                 }
                 CompletionKind.LYRICS -> {
                     val repository = LyricsRepository(context)
-                    require(repository.load(song) == null) { "Esta canción ya tiene letras. Se conservaron." }
                     repository.saveOnline(song, match.lyrics)
                     "Letra guardada en Yang."
                 }
             }
             if (kind != CompletionKind.LYRICS) {
-                require(prefs.edit().putString(key(song), saved.toString()).commit()) { "No se pudieron guardar los datos." }
+                require(prefs.edit().putString(k, saved.toString()).commit()) { "No se pudieron guardar los datos." }
             }
             revision.value++
             message

@@ -26,20 +26,34 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.rounded.CloudDownload
+import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
+import coil.compose.AsyncImage
+import com.yang.player.data.CloudPlaylistSummary
+import com.yang.player.data.CloudStreamQuality
 import com.yang.player.ui.theme.BackgroundDark
 import com.yang.player.ui.components.PlaylistPickerSheet
 import androidx.compose.ui.platform.LocalContext
@@ -68,6 +82,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -86,6 +102,29 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+private val DIACRITICS_REGEX = Regex("\\p{M}+")
+private val songSortOptions = listOf(
+    "title" to "Título",
+    "artist" to "Artista",
+    "album" to "Álbum",
+    "duration" to "Duración",
+    "recent" to "Añadidas recientemente"
+)
+
+private enum class SongListPanel(val title: String) {
+    SORT("Ordenar canciones"),
+    OPTIONS("Filtros y opciones"),
+    QUALITY("Calidad de reproducción")
+}
+
+private fun stripDiacritics(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return ""
+    return Normalizer.normalize(trimmed, Normalizer.Form.NFD)
+        .replace(DIACRITICS_REGEX, "")
+        .lowercase(Locale.ROOT)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongsLibraryScreen(
@@ -101,7 +140,19 @@ fun SongsLibraryScreen(
     onViewArtist: (String) -> Unit = {},
     requestSearchFocus: Boolean = false,
     onSearchFocusHandled: () -> Unit = {},
-    onAudioSettings: () -> Unit = {}
+    onAudioSettings: () -> Unit = {},
+    cloudDownloadName: (Song) -> String? = { null },
+    onCloudDownload: (Song, android.net.Uri?) -> Unit = { _, _ -> },
+    isCloudMode: Boolean = false,
+    isCloudRefreshing: Boolean = false,
+    onCloudRefresh: () -> Unit = {},
+    downloadedCloudIds: Set<String> = emptySet(),
+    streamQuality: CloudStreamQuality = CloudStreamQuality.RAW,
+    onStreamQualitySelected: (CloudStreamQuality) -> Unit = {},
+    cloudPlaylists: List<CloudPlaylistSummary> = emptyList(),
+    onCreateCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
+    onAddToCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
+    onStartRadio: ((Song) -> Unit)? = null,
 ) {
     val searchFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -113,19 +164,41 @@ fun SongsLibraryScreen(
         }
     }
     val context = LocalContext.current
-    val preferences = remember(context) { context.getSharedPreferences("song_list_options", android.content.Context.MODE_PRIVATE) }
-    var sortKey by remember { mutableStateOf(preferences.getString("sort", "title") ?: "title") }
-    var descending by remember { mutableStateOf(preferences.getBoolean("descending", false)) }
-    var onlyFavorites by remember { mutableStateOf(preferences.getBoolean("favorites", false)) }
-    var onlyHiRes by remember { mutableStateOf(preferences.getBoolean("hires", false)) }
-    var showListOptions by remember { mutableStateOf(false) }
+    val preferences = remember(context, isCloudMode) {
+        context.getSharedPreferences(
+            if (isCloudMode) "song_list_options_cloud" else "song_list_options",
+            android.content.Context.MODE_PRIVATE
+        )
+    }
+    var sortKey by remember(preferences) { mutableStateOf(preferences.getString("sort", "title") ?: "title") }
+    var descending by remember(preferences) { mutableStateOf(preferences.getBoolean("descending", false)) }
+    var onlyFavorites by remember(preferences) { mutableStateOf(preferences.getBoolean("favorites", false)) }
+    var onlyHiRes by remember(preferences) { mutableStateOf(preferences.getBoolean("hires", false)) }
+    var onlyDownloaded by remember(preferences) { mutableStateOf(preferences.getBoolean("downloaded", false)) }
+    var listPanel by remember(preferences) { mutableStateOf<SongListPanel?>(null) }
     var createPlaylist by remember { mutableStateOf(false) }
-    fun saveOptions() { preferences.edit().putString("sort",sortKey).putBoolean("descending",descending).putBoolean("favorites",onlyFavorites).putBoolean("hires",onlyHiRes).apply() }
-    fun normalized(value: String) = Normalizer.normalize(value.trim(), Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT)
+    fun saveOptions() {
+        preferences.edit()
+            .putString("sort", sortKey)
+            .putBoolean("descending", descending)
+            .putBoolean("favorites", onlyFavorites)
+            .putBoolean("hires", onlyHiRes)
+            .putBoolean("downloaded", onlyDownloaded)
+            .apply()
+    }
     fun indexLabel(song: Song) = when(sortKey) { "artist" -> song.artist; "album" -> song.album; else -> song.title }
     var searchQuery by remember { mutableStateOf("") }
     var selectedSongForOptions by remember { mutableStateOf<Song?>(null) }
+    var pendingCloudDownload by remember { mutableStateOf<Song?>(null) }
+    val downloadPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        val song = pendingCloudDownload
+        pendingCloudDownload = null
+        if (song != null && uri != null) onCloudDownload(song, uri)
+    }
     val listState = rememberLazyListState()
+    val pullRefreshState = rememberPullToRefreshState()
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
@@ -136,22 +209,53 @@ fun SongsLibraryScreen(
     var scrubberTouchYPx by remember { mutableFloatStateOf(0f) }
     var scrubberHeightPx by remember { mutableFloatStateOf(1f) }
     var hideJob by remember { mutableStateOf<Job?>(null) }
+    var jumpJob by remember { mutableStateOf<Job?>(null) }
+
+
+    val effectiveOnlyDownloaded = isCloudMode && onlyDownloaded
+    val effectiveSortKey = if (sortKey == "bpm") "title" else sortKey
+    val hasActiveFilter = onlyFavorites || onlyHiRes || effectiveOnlyDownloaded
+    val hasCustomOrder = effectiveSortKey != "title" || descending
 
     val favoriteIds = remember(favoriteSongs) { favoriteSongs.map { it.id }.toSet() }
-    val filteredSongs = remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, sortKey, descending) {
-        val matching = songs.filter { song ->
-            (!onlyFavorites || song.id in favoriteIds) && (!onlyHiRes || song.isHiRes) &&
-                (searchQuery.isBlank() || listOf(song.title, song.artist, song.album).any { it.contains(searchQuery, ignoreCase = true) })
+    val filteredSongs = remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded, downloadedCloudIds, effectiveSortKey, descending) {
+        val hasQuery = searchQuery.isNotBlank()
+        val query = searchQuery.trim()
+        val matching = if (!onlyFavorites && !onlyHiRes && !effectiveOnlyDownloaded && !hasQuery) {
+            songs
+        } else {
+            songs.filter { song ->
+                (!onlyFavorites || song.id in favoriteIds) &&
+                (!onlyHiRes || song.isHiRes) &&
+                (!effectiveOnlyDownloaded || song.id in downloadedCloudIds) &&
+                (!hasQuery || song.title.contains(query, ignoreCase = true) || song.artist.contains(query, ignoreCase = true) || song.album.contains(query, ignoreCase = true))
+            }
         }
-        val order = when(sortKey) {
-            "artist" -> compareBy<Song> { normalized(it.artist) }.thenBy { normalized(it.title) }
-            "album" -> compareBy<Song> { normalized(it.album) }.thenBy { normalized(it.title) }
-            "duration" -> compareBy<Song> { it.durationMs }.thenBy { normalized(it.title) }
-            else -> compareBy<Song> { normalized(it.title) }
-        }.thenBy { it.id }
-        matching.sortedWith(if(descending) order.reversed() else order)
+
+            val comparator = when (effectiveSortKey) {
+                "artist" -> {
+                    val keys = matching.associateWith { stripDiacritics(it.artist) }
+                    compareBy<Song> { keys[it] ?: "" }.thenBy { stripDiacritics(it.title) }.thenBy { it.id }
+                }
+                "album" -> {
+                    val keys = matching.associateWith { stripDiacritics(it.album) }
+                    compareBy<Song> { keys[it] ?: "" }.thenBy { stripDiacritics(it.title) }.thenBy { it.id }
+                }
+                "duration" -> {
+                    compareBy<Song> { it.durationMs }.thenBy { stripDiacritics(it.title) }.thenBy { it.id }
+                }
+                "recent" -> {
+                    compareByDescending<Song> { it.dateAdded }.thenBy { stripDiacritics(it.title) }.thenBy { it.id }
+                }
+
+                else -> {
+                    val keys = matching.associateWith { stripDiacritics(it.title) }
+                    compareBy<Song> { keys[it] ?: "" }.thenBy { it.id }
+                }
+            }
+            if (descending) matching.sortedWith(comparator.reversed()) else matching.sortedWith(comparator)
     }
-    LaunchedEffect(searchQuery, sortKey, descending, onlyFavorites, onlyHiRes) { listState.scrollToItem(0) }
+    LaunchedEffect(searchQuery, effectiveSortKey, descending, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded) { listState.scrollToItem(0) }
 
     // Alphabet index list
     val alphabet = remember { listOf("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "#") }
@@ -159,16 +263,16 @@ fun SongsLibraryScreen(
     fun findIndexForLetter(letter: String): Int {
         if (filteredSongs.isEmpty()) return -1
         if (letter == "#") {
-            val numIdx = filteredSongs.indexOfFirst { normalized(indexLabel(it)).firstOrNull()?.isLetter() != true }
+            val numIdx = filteredSongs.indexOfFirst { stripDiacritics(indexLabel(it)).firstOrNull()?.isLetter() != true }
             return if (numIdx >= 0) numIdx else 0
         }
         val targetChar = letter.first().uppercaseChar()
         val exact = filteredSongs.indexOfFirst {
-            normalized(indexLabel(it)).firstOrNull()?.uppercaseChar() == targetChar
+            stripDiacritics(indexLabel(it)).firstOrNull()?.uppercaseChar() == targetChar
         }
         if (exact >= 0) return exact
         val nextIdx = filteredSongs.indexOfFirst {
-            normalized(indexLabel(it)).firstOrNull()?.let { first -> first.isLetter() && first.uppercaseChar() > targetChar } == true
+            stripDiacritics(indexLabel(it)).firstOrNull()?.let { first -> first.isLetter() && first.uppercaseChar() > targetChar } == true
         }
         return nextIdx
     }
@@ -182,7 +286,6 @@ fun SongsLibraryScreen(
                 .fillMaxSize()
                 .padding(top = 16.dp)
         ) {
-            // Header: Title with top action buttons (Sort & Tune)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -190,7 +293,7 @@ fun SongsLibraryScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(Modifier.weight(1f)) {
                     Text(
                         text = "Canciones",
                         color = TextWhite,
@@ -198,7 +301,7 @@ fun SongsLibraryScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if(onlyFavorites || onlyHiRes || searchQuery.isNotBlank()) "${filteredSongs.size} de ${songs.size} pistas" else "${filteredSongs.size} pistas disponibles",
+                        text = if (hasActiveFilter || searchQuery.isNotBlank()) "${filteredSongs.size} de ${songs.size} canciones" else "${filteredSongs.size} canciones",
                         color = TextMuted,
                         fontSize = 13.sp
                     )
@@ -208,38 +311,32 @@ fun SongsLibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box {
                     IconButton(
-                        onClick = { showListOptions = true },
-                        modifier = Modifier.size(36.dp)
+                        onClick = { listPanel = SongListPanel.SORT },
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Sort,
-                            contentDescription = "Ordenar y filtrar canciones",
-                            tint = if(onlyFavorites || onlyHiRes || sortKey != "title" || descending) accent else TextMuted,
+                            contentDescription = "Ordenar canciones",
+                            tint = if (hasCustomOrder) accent else TextMuted,
                             modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    if(showListOptions) ModalBottomSheet(onDismissRequest = { showListOptions = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = lerp(BackgroundDark, accent, .08f)) {
-                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
-                        Text("Organizar canciones", color = TextWhite, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
-                        Text("Ordenar por", color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                        listOf("title" to "Título", "artist" to "Artista", "album" to "Álbum", "duration" to "Duración").forEach { (key, label) ->
-                            DropdownMenuItem(text = { Text(label, color = if(sortKey == key) accent else TextWhite) }, onClick = { sortKey = key; saveOptions(); showListOptions = false }, trailingIcon = { if(sortKey == key) Icon(Icons.Default.Check, null, tint = accent) })
-                        }
-                        DropdownMenuItem(text = { Text("Orden descendente", color = TextWhite) }, onClick = { descending = !descending; saveOptions() }, trailingIcon = { if(descending) Icon(Icons.Default.Check, null, tint = accent) })
-                        HorizontalDivider(color = Color.White.copy(alpha = .1f))
-                        DropdownMenuItem(text = { Text("Solo favoritos", color = TextWhite) }, onClick = { onlyFavorites = !onlyFavorites; saveOptions() }, trailingIcon = { if(onlyFavorites) Icon(Icons.Default.Check, null, tint = accent) })
-                        DropdownMenuItem(text = { Text("Solo Hi-Res", color = TextWhite) }, onClick = { onlyHiRes = !onlyHiRes; saveOptions() }, trailingIcon = { if(onlyHiRes) Icon(Icons.Default.Check, null, tint = accent) })
-                        HorizontalDivider(color = Color.White.copy(alpha = .1f))
-                        DropdownMenuItem(text = { Text("Crear playlist", color = accent) }, onClick = { showListOptions = false; createPlaylist = true })
-                        }
-                    }
+                    IconButton(
+                        onClick = { listPanel = SongListPanel.OPTIONS },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.FilterAlt,
+                            contentDescription = "Filtros y opciones de canciones",
+                            tint = if (hasActiveFilter) accent else TextMuted,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                     IconButton(
                         onClick = onAudioSettings,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Tune,
@@ -311,108 +408,130 @@ fun SongsLibraryScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Fast-fling optimized LazyColumn with 185dp bottom content padding
-            Row(modifier = Modifier.fillMaxSize()) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 185.dp)
-                ) {
-                    if(filteredSongs.isEmpty()) item {
-                        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("No hay canciones con estas opciones", color = TextMuted)
-                            TextButton(onClick = { searchQuery = ""; onlyFavorites = false; onlyHiRes = false; saveOptions() }) { Text("Mostrar todas", color = accent) }
-                        }
-                    }
-                    items(
-                        items = filteredSongs,
-                        key = { it.id },
-                        contentType = { "song_row" }
-                    ) { song ->
-                        SongListItem(
-                            song = song,
-                            isPlayingThisSong = song.id == currentPlayingSongId,
-                            isPlaybackActive = isPlaying,
-                            onClick = { onSongSelected(song, filteredSongs) },
-                            onOptionsClick = { selectedSongForOptions = song }
-                        )
-                    }
-                }
-
-                // Fast alphabet jump scrubber
-                if (searchQuery.isEmpty() && sortKey != "duration" && !descending && filteredSongs.isNotEmpty()) {
-                    Box(
+            val refreshModifier = if (isCloudMode) {
+                Modifier.pullToRefresh(
+                    isRefreshing = isCloudRefreshing,
+                    state = pullRefreshState,
+                    onRefresh = onCloudRefresh
+                )
+            } else Modifier
+            Box(Modifier.fillMaxSize().then(refreshModifier)) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
-                            .padding(end = 4.dp, top = 8.dp, bottom = 190.dp)
-                            .fillMaxHeight()
-                            .onGloballyPositioned { coordinates ->
-                                scrubberHeightPx = coordinates.size.height.toFloat()
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 185.dp)
+                    ) {
+                        if (filteredSongs.isEmpty() && !isCloudRefreshing) item {
+                            Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("No hay canciones con estas opciones", color = TextMuted)
+                                TextButton(onClick = { searchQuery = ""; onlyFavorites = false; onlyHiRes = false; onlyDownloaded = false; saveOptions() }) { Text("Mostrar todas", color = accent) }
                             }
-                            .pointerInput(sortKey, alphabet, filteredSongs) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    down.consume()
-                                    hideJob?.cancel()
-                                    isScrubbing = true
+                        }
+                        items(
+                            items = filteredSongs,
+                            key = { it.id },
+                            contentType = { "song_row" }
+                        ) { song ->
+                            SongListItem(
+                                song = song,
+                                isPlayingThisSong = song.id == currentPlayingSongId,
+                                isPlaybackActive = isPlaying,
+                                onClick = { onSongSelected(song, filteredSongs) },
+                                onOptionsClick = { selectedSongForOptions = song }
+                            )
+                        }
 
-                                    fun handleTouch(y: Float) {
-                                        scrubberTouchYPx = y
-                                        if (scrubberHeightPx > 0f) {
-                                            val clampedY = y.coerceIn(0f, scrubberHeightPx - 1f)
-                                            val itemHeight = scrubberHeightPx / alphabet.size
-                                            val index = (clampedY / itemHeight).toInt().coerceIn(0, alphabet.lastIndex)
-                                            val letter = alphabet[index]
-                                            if (letter != activeLetter) {
-                                                activeLetter = letter
-                                                try {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                } catch (_: Exception) {}
-                                                val targetIdx = findIndexForLetter(letter)
-                                                if (targetIdx >= 0) {
-                                                    scope.launch { listState.scrollToItem(targetIdx) }
+                    }
+
+                    // Fast alphabet jump scrubber
+                    if (searchQuery.isEmpty() && effectiveSortKey != "duration" && effectiveSortKey != "recent" && effectiveSortKey != "bpm" && !descending && filteredSongs.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 4.dp, top = 8.dp, bottom = 190.dp)
+                                .fillMaxHeight()
+                                .onGloballyPositioned { coordinates ->
+                                    scrubberHeightPx = coordinates.size.height.toFloat()
+                                }
+                                .pointerInput(effectiveSortKey, alphabet, filteredSongs) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        down.consume()
+                                        hideJob?.cancel()
+                                        isScrubbing = true
+                                        activeLetter = null
+
+                                        fun handleTouch(y: Float) {
+                                            scrubberTouchYPx = y
+                                            if (scrubberHeightPx > 0f) {
+                                                val clampedY = y.coerceIn(0f, scrubberHeightPx - 1f)
+                                                val itemHeight = scrubberHeightPx / alphabet.size
+                                                val index = (clampedY / itemHeight).toInt().coerceIn(0, alphabet.lastIndex)
+                                                val letter = alphabet[index]
+                                                if (letter != activeLetter) {
+                                                    activeLetter = letter
+                                                    try {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    } catch (_: Exception) {}
+                                                    val targetIdx = findIndexForLetter(letter)
+                                                    if (targetIdx >= 0) {
+                                                        jumpJob?.cancel()
+                                                        jumpJob = scope.launch { listState.scrollToItem(targetIdx) }
+                                                    }
                                                 }
                                             }
                                         }
+
+                                        handleTouch(down.position.y)
+
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val pointer = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!pointer.pressed) break
+                                            pointer.consume()
+                                            handleTouch(pointer.position.y)
+                                        }
+
+                                        hideJob = scope.launch {
+                                            delay(250)
+                                            isScrubbing = false
+                                            activeLetter = null
+                                        }
                                     }
-
-                                    handleTouch(down.position.y)
-
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        val pointer = event.changes.firstOrNull { it.id == down.id } ?: break
-                                        if (!pointer.pressed) break
-                                        pointer.consume()
-                                        handleTouch(pointer.position.y)
-                                    }
-
-                                    hideJob = scope.launch {
-                                        delay(250)
-                                        isScrubbing = false
-                                        activeLetter = null
+                                }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(32.dp),
+                                verticalArrangement = Arrangement.SpaceBetween,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                alphabet.forEach { letter ->
+                                    val isSelected = isScrubbing && activeLetter == letter
+                                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = letter,
+                                            color = if (isSelected) accent else Color.White.copy(alpha = 0.40f),
+                                            fontSize = if (isSelected) 10.sp else 8.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                        )
                                     }
                                 }
                             }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(22.dp),
-                            verticalArrangement = Arrangement.SpaceBetween,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            alphabet.forEach { letter ->
-                                val isSelected = isScrubbing && activeLetter == letter
-                                Text(
-                                    text = letter,
-                                    color = if (isSelected) accent else Color.White.copy(alpha = 0.40f),
-                                    fontSize = if (isSelected) 10.sp else 8.5.sp,
-                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
-                                )
-                            }
                         }
                     }
+                }
+                if (isCloudMode) {
+                    PullToRefreshDefaults.Indicator(
+                        state = pullRefreshState,
+                        isRefreshing = isCloudRefreshing,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                        containerColor = SurfaceCard,
+                        color = accent
+                    )
                 }
             }
         }
@@ -443,7 +562,114 @@ fun SongsLibraryScreen(
             }
         }
 
-        if(createPlaylist) PlaylistPickerSheet(emptyList()) { createPlaylist = false }
+        listPanel?.let { panel ->
+            ModalBottomSheet(
+                onDismissRequest = { listPanel = null },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = lerp(BackgroundDark, accent, .08f)
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(
+                        start = 12.dp, end = 12.dp, bottom = 16.dp
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (panel == SongListPanel.QUALITY) {
+                            IconButton(onClick = { listPanel = SongListPanel.OPTIONS }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver a filtros y opciones", tint = TextWhite)
+                            }
+                        }
+                        Text(
+                            panel.title,
+                            color = TextWhite,
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+                    when (panel) {
+                        SongListPanel.SORT -> {
+                            songSortOptions.forEach { (key, label) ->
+                                SongListChoice(label, effectiveSortKey == key, accent) {
+                                    sortKey = key
+                                    saveOptions()
+                                    listPanel = null
+                                }
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = .1f))
+                            SongListChoice("Orden descendente", descending, accent) {
+                                descending = !descending
+                                saveOptions()
+                            }
+                        }
+
+                        SongListPanel.OPTIONS -> {
+                            SongListChoice("Solo favoritos", onlyFavorites, accent) {
+                                onlyFavorites = !onlyFavorites
+                                saveOptions()
+                            }
+                            SongListChoice("Solo Hi-Res", onlyHiRes, accent) {
+                                onlyHiRes = !onlyHiRes
+                                saveOptions()
+                            }
+                            if (isCloudMode) {
+                                SongListChoice("Solo descargadas", onlyDownloaded, accent) {
+                                    onlyDownloaded = !onlyDownloaded
+                                    saveOptions()
+                                }
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = .1f))
+                            if (isCloudMode) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(Modifier.padding(vertical = 6.dp)) {
+                                            Text(SongListPanel.QUALITY.title, color = TextWhite)
+                                            Text(streamQuality.label, color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    },
+                                    onClick = { listPanel = SongListPanel.QUALITY },
+                                    trailingIcon = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = TextMuted) }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Crear playlist", color = accent) },
+                                onClick = {
+                                    listPanel = null
+                                    createPlaylist = true
+                                },
+                                trailingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null, tint = accent) }
+                            )
+                        }
+
+                        SongListPanel.QUALITY -> {
+                            CloudStreamQuality.entries.forEach { quality ->
+                                SongListChoice(quality.label, streamQuality == quality, accent) {
+                                    if (quality != streamQuality) onStreamQualitySelected(quality)
+                                    listPanel = SongListPanel.OPTIONS
+                                }
+                            }
+                            Text(
+                                "Se aplica a la próxima canción.\n64 kbps ≈ 0,5 MB/min · 96 kbps ≈ 0,7 MB/min",
+                                color = TextMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if(createPlaylist) PlaylistPickerSheet(
+            songs = emptyList(),
+            isCloudMode = isCloudMode,
+            cloudPlaylists = cloudPlaylists,
+            onCreateCloudPlaylist = onCreateCloudPlaylist,
+            onAddToCloudPlaylist = onAddToCloudPlaylist,
+        ) { createPlaylist = false }
+
         // Song Options ModalBottomSheet (All actions copied from reference)
         if (selectedSongForOptions != null) {
             val song = selectedSongForOptions!!
@@ -452,6 +678,19 @@ fun SongsLibraryScreen(
             SongOptionsMenuModal(
                 song = song,
                 isFavorite = isFav,
+                onDownload = cloudDownloadName(song)?.let { filename ->
+                    {
+                        if (android.os.Build.VERSION.SDK_INT >= 29) onCloudDownload(song, null)
+                        else {
+                            pendingCloudDownload = song
+                            downloadPicker.launch(filename)
+                        }
+                    }
+                },
+                onStartRadio = if (isCloudMode) onStartRadio else null,
+                cloudPlaylists = cloudPlaylists,
+                onCreateCloudPlaylist = onCreateCloudPlaylist,
+                onAddToCloudPlaylist = onAddToCloudPlaylist,
                 onDismiss = { selectedSongForOptions = null },
                 onPlayNext = { s -> onPlayNext(s) },
                 onAddToQueue = { s -> onAddToQueue(s) },
@@ -465,4 +704,16 @@ fun SongsLibraryScreen(
             )
         }
     }
+}
+
+@Composable
+private fun SongListChoice(label: String, checked: Boolean, accent: Color, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label, color = if (checked) accent else TextWhite) },
+        modifier = Modifier.clip(RoundedCornerShape(10.dp))
+            .background(if (checked) accent.copy(alpha = .10f) else Color.Transparent)
+            .semantics { selected = checked },
+        onClick = onClick,
+        trailingIcon = { if (checked) Icon(Icons.Default.Check, null, tint = accent) }
+    )
 }

@@ -39,8 +39,12 @@ private val artworkPalettes = android.util.LruCache<String, ArtworkPalette>(24)
 @Composable
 fun rememberArtworkPalette(song: Song?): ArtworkPalette {
     val context = LocalContext.current.applicationContext
-    var palette by remember { mutableStateOf(ArtworkPalette()) }
-    LaunchedEffect(song?.id, song?.artworkUri) {
+    var palette by remember(song?.id) {
+        val initialKey = song?.let { "${it.id}:${it.artworkUri ?: it.mediaUri}" }
+        val cached = initialKey?.let { synchronized(artworkPalettes) { artworkPalettes.get(it) } }
+        mutableStateOf(cached ?: ArtworkPalette())
+    }
+    LaunchedEffect(song?.id, song?.artworkUri, song?.mediaUri) {
         val current = song
         if (current == null) palette = ArtworkPalette() else {
             val key = "${current.id}:${current.artworkUri ?: current.mediaUri}"
@@ -57,6 +61,61 @@ fun rememberArtworkPalette(song: Song?): ArtworkPalette {
     }
 
     return palette
+}
+
+@Composable
+fun rememberArtworkPalette(artworkUri: String?, fallbackSong: Song? = null): ArtworkPalette {
+    val context = LocalContext.current.applicationContext
+    var palette by remember { mutableStateOf(ArtworkPalette()) }
+    LaunchedEffect(artworkUri, fallbackSong?.id, fallbackSong?.artworkUri) {
+        val uriStr = artworkUri?.takeIf { it.isNotBlank() }
+        val song = fallbackSong
+        if (uriStr == null && song == null) {
+            palette = ArtworkPalette()
+        } else {
+            val key = uriStr ?: "${song?.id}:${song?.artworkUri ?: song?.mediaUri}"
+            val cached = synchronized(artworkPalettes) { artworkPalettes.get(key) }
+            if (cached != null) {
+                palette = cached
+            } else {
+                val cover = withContext(Dispatchers.IO) {
+                    if (uriStr != null) {
+                        loadCoverBitmapFromUri(context, uriStr) ?: song?.let { loadSongCoverBitmap(context, it) }
+                    } else if (song != null) {
+                        loadSongCoverBitmap(context, song)
+                    } else null
+                }
+                val loaded = cover?.let { withContext(Dispatchers.Default) { buildAppleMusicAmbientPalette(it) } }
+                if (loaded != null) {
+                    synchronized(artworkPalettes) { artworkPalettes.put(key, loaded) }
+                    palette = loaded
+                } else palette = ArtworkPalette()
+            }
+        }
+    }
+    return palette
+}
+
+private suspend fun loadCoverBitmapFromUri(context: Context, uriStr: String): Bitmap? {
+    return try {
+        val uri = Uri.parse(uriStr)
+        if (uri.scheme == "file" && uri.path != null) {
+            val file = File(uri.path!!)
+            if (file.exists() && file.length() > 0) {
+                val bmp = BitmapFactory.decodeFile(file.absolutePath)
+                if (bmp != null) return bmp
+            }
+        }
+        val req = ImageRequest.Builder(context)
+            .data(uri)
+            .size(128, 128)
+            .allowHardware(false)
+            .build()
+        val result = context.imageLoader.execute(req)
+        (result.drawable as? BitmapDrawable)?.bitmap
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /**

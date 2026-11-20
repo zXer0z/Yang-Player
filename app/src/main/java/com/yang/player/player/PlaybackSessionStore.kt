@@ -26,7 +26,8 @@ internal class PlaybackSessionStore(context: Context) {
             Song(j.getString("id"), j.getString("title"), j.optString("artist"), j.optString("album"), j.optLong("duration"),
                 j.getString("uri"), j.optString("art").takeIf(String::isNotBlank), j.optString("path"),
                 runCatching { AudioFormat.valueOf(j.optString("format")) }.getOrDefault(AudioFormat.UNKNOWN),
-                j.optInt("rate", 44100), j.optInt("bits", 16), j.optBoolean("hires"), albumArtist = j.optString("albumArtist"))
+                j.optInt("rate", 44100), j.optInt("bits", 16), j.optBoolean("hires"), albumArtist = j.optString("albumArtist"),
+                dateAdded = j.optLong("dateAdded"), genre = j.optString("genre"), trackNumber = j.optInt("track"), discNumber = j.optInt("disc", 1))
         }
         if (songs.isEmpty()) null else SavedPlayback(songs, prefs.getInt("index", 0).coerceIn(songs.indices),
             prefs.getLong("position", 0).coerceAtLeast(0), prefs.getInt("repeat", Player.REPEAT_MODE_OFF), prefs.getBoolean("shuffle", false))
@@ -55,7 +56,8 @@ internal class PlaybackSessionStore(context: Context) {
             val song = song(player.getMediaItemAt(i), duration = if(i == player.currentMediaItemIndex) player.duration else 0) ?: return
             array.put(JSONObject().put("id", song.id).put("title", song.title).put("artist", song.artist).put("album", song.album)
                 .put("duration", song.durationMs).put("uri", song.mediaUri).put("art", song.artworkUri.orEmpty()).put("path", song.dataPath)
-                .put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth).put("hires", song.isHiRes).put("albumArtist", song.albumArtist))
+                .put("format", song.format.name).put("rate", song.sampleRateHz).put("bits", song.bitDepth).put("hires", song.isHiRes).put("albumArtist", song.albumArtist)
+                .put("dateAdded", song.dateAdded).put("genre", song.genre).put("track", song.trackNumber).put("disc", song.discNumber))
         }
         val edit = prefs.edit()
         val json = array.toString()
@@ -78,10 +80,12 @@ internal class PlaybackSessionStore(context: Context) {
                 putInt("sourceRate", song.sampleRateHz); putInt("sourceBits", song.bitDepth)
                 putString("yangUri", song.mediaUri); putString("yangPath", song.dataPath); putString("yangFormat", song.format.name)
                 putLong("yangDuration", song.durationMs); putBoolean("yangHiRes", song.isHiRes)
+                putLong("yangDateAdded", song.dateAdded)
             }
             return MediaItem.Builder().setMediaId(song.id).setUri(uri)
                 .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album).setAlbumArtist(song.albumArtist)
+                    .setGenre(song.genre.takeIf(String::isNotBlank)).setTrackNumber(song.trackNumber.takeIf { it > 0 }).setDiscNumber(song.discNumber)
                     .setArtworkUri(song.artworkUri?.let(Uri::parse)).setExtras(extras).build()).build()
         }
 
@@ -90,16 +94,22 @@ internal class PlaybackSessionStore(context: Context) {
             val extras = meta.extras
             val uri = extras?.getString("yangUri") ?: item.requestMetadata.mediaUri?.toString() ?: item.localConfiguration?.uri?.toString() ?: fallback?.mediaUri ?: return null
             if (uri.isBlank()) return null
+            val isSameSong = fallback != null && (fallback.id == item.mediaId || fallback.mediaUri == uri)
+            val validFallback = if (isSameSong) fallback else null
             val format = runCatching { AudioFormat.valueOf(extras?.getString("yangFormat") ?: extras?.getString("sourceCodec").orEmpty()) }
-                .getOrDefault(fallback?.format ?: AudioFormat.fromPathOrMime(uri, null))
-            return Song(id = item.mediaId.ifBlank { fallback?.id ?: uri }, title = meta.title?.toString() ?: fallback?.title ?: "Sin título",
-                artist = meta.artist?.toString() ?: fallback?.artist.orEmpty(), album = meta.albumTitle?.toString() ?: fallback?.album.orEmpty(),
-                durationMs = duration.takeIf { it > 0 } ?: extras?.getLong("yangDuration")?.takeIf { it > 0 } ?: fallback?.durationMs ?: 0,
-                mediaUri = uri, artworkUri = meta.artworkUri?.toString() ?: fallback?.artworkUri, dataPath = extras?.getString("yangPath") ?: fallback?.dataPath.orEmpty(),
-                format = format, sampleRateHz = extras?.getInt("sourceRate", fallback?.sampleRateHz ?: 44100) ?: fallback?.sampleRateHz ?: 44100,
-                bitDepth = extras?.getInt("sourceBits", fallback?.bitDepth ?: 16) ?: fallback?.bitDepth ?: 16,
-                isHiRes = extras?.getBoolean("yangHiRes", fallback?.isHiRes ?: false) ?: fallback?.isHiRes ?: false,
-                albumArtist = meta.albumArtist?.toString() ?: fallback?.albumArtist.orEmpty())
+                .getOrDefault(validFallback?.format ?: AudioFormat.fromPathOrMime(uri, null))
+            return Song(id = item.mediaId.ifBlank { validFallback?.id ?: uri }, title = meta.title?.toString() ?: validFallback?.title ?: "Sin título",
+                artist = meta.artist?.toString() ?: validFallback?.artist.orEmpty(), album = meta.albumTitle?.toString() ?: validFallback?.album.orEmpty(),
+                durationMs = duration.takeIf { it > 0 } ?: extras?.getLong("yangDuration")?.takeIf { it > 0 } ?: validFallback?.durationMs ?: 0,
+                mediaUri = uri, artworkUri = meta.artworkUri?.toString() ?: validFallback?.artworkUri, dataPath = extras?.getString("yangPath") ?: validFallback?.dataPath.orEmpty(),
+                format = format, sampleRateHz = extras?.getInt("sourceRate", validFallback?.sampleRateHz ?: 44100) ?: validFallback?.sampleRateHz ?: 44100,
+                bitDepth = extras?.getInt("sourceBits", validFallback?.bitDepth ?: 16) ?: validFallback?.bitDepth ?: 16,
+                isHiRes = extras?.getBoolean("yangHiRes", validFallback?.isHiRes ?: false) ?: validFallback?.isHiRes ?: false,
+                albumArtist = meta.albumArtist?.toString() ?: validFallback?.albumArtist.orEmpty(),
+                dateAdded = extras?.getLong("yangDateAdded") ?: validFallback?.dateAdded ?: 0L,
+                genre = meta.genre?.toString() ?: validFallback?.genre.orEmpty(),
+                trackNumber = meta.trackNumber ?: validFallback?.trackNumber ?: 0,
+                discNumber = meta.discNumber ?: validFallback?.discNumber ?: 1)
         }
     }
 }

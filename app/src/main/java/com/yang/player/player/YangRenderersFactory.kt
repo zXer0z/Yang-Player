@@ -12,6 +12,7 @@ class YangRenderersFactory(context: Context) : DefaultRenderersFactory(context) 
 
     init {
         setEnableDecoderFallback(true)
+        setExtensionRendererMode(EXTENSION_RENDERER_MODE_ON)
     }
 
     override fun buildAudioSink(
