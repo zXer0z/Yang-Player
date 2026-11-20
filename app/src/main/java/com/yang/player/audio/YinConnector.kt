@@ -6,6 +6,7 @@ import android.os.*
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import android.view.KeyEvent
 import com.yang.bridge.YinProtocol
 import com.yang.player.BuildConfig
 import kotlinx.coroutines.*
@@ -27,11 +28,36 @@ class YinConnector private constructor(private val context: Context) {
     @Volatile private var remote: IBinder? = null
     @Volatile private var retryAfter = 0L
     @Volatile private var protectedSession = false
+    @Volatile private var currentMediaButtons: IBinder? = null
+    private var mediaButtonHandler: ((Int) -> Unit)? = null
     private var bound = false
     private var poll: Job? = null
     @Volatile private var source = Bundle()
     fun updateSource(value: Bundle) { source = Bundle(value) }
     internal fun sourceSnapshot(): Bundle = source
+    internal fun setMediaButtonHandler(handler: ((Int) -> Unit)?) {
+        mediaButtonHandler = handler
+    }
+
+    private fun mediaButtonReceiver(): IBinder = object : Binder() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            if (code != YinProtocol.MEDIA_BUTTON) return super.onTransact(code, data, reply, flags)
+            val uid = Binder.getCallingUid()
+            if (currentMediaButtons !== this || !trusted() ||
+                runCatching { context.packageManager.getPackageUid(YinProtocol.PACKAGE, 0) }.getOrNull() != uid
+            ) throw SecurityException("Control multimedia de Yin no autorizado")
+
+            data.enforceInterface(YinProtocol.MEDIA_BUTTON_DESCRIPTOR)
+            val key = data.readInt()
+            when (key) {
+                KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP,
+                KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    main.post { if (currentMediaButtons === this) mediaButtonHandler?.invoke(key) }
+                }
+            }
+            return true
+        }
+    }
     private val reconnect = Runnable { bind() }
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
@@ -70,6 +96,7 @@ class YinConnector private constructor(private val context: Context) {
     }
     private fun disconnect() {
         poll?.cancel(); remote = null
+        currentMediaButtons = null
         if (bound) runCatching { context.unbindService(connection) }
         bound = false
         _state.update { it.copy(ready = false, active = protectedSession, message = "Yin se desconectó · esperando sin reproducir audio sin efectos") }
@@ -80,7 +107,7 @@ class YinConnector private constructor(private val context: Context) {
     fun mustWaitForYin() = protectedSession && _state.value.enabled != false
     private fun acceptHello(result: Bundle) {
         val enabled = if (result.containsKey("enabled")) result.getBoolean("enabled") else if (result.getBoolean("ready")) true else _state.value.enabled
-        if (enabled == false) { protectedSession = false; retryAfter = 0 }
+        if (enabled == false) { protectedSession = false; retryAfter = 0; currentMediaButtons = null }
         val ready = result.getInt("version") == YinProtocol.VERSION && result.getBoolean("ready") && SystemClock.elapsedRealtime() >= retryAfter
         _state.update { it.copy(installed = true, enabled = enabled, ready = ready, active = if(enabled == false) false else it.active,
             message = if (SystemClock.elapsedRealtime() < retryAfter) it.message else result.getString("message").orEmpty()) }
@@ -88,8 +115,10 @@ class YinConnector private constructor(private val context: Context) {
     fun open(rate: Int, channels: Int, encoding: Int, volume: Float, playing: Boolean): YinChannel {
         val service = remote?.takeIf { canOpen() } ?: throw IOException("Yin no está listo")
         val token = Binder()
+        val mediaButtons = mediaButtonReceiver()
         val args = Bundle().apply { putInt("version", YinProtocol.VERSION); putInt("rate", rate); putInt("channels", channels); putInt("encoding", encoding); putFloat("volume", volume); putBoolean("playing", playing); putBinder("client", token) }
         args.putBundle("source", sourceSnapshot())
+        args.putBinder(YinProtocol.MEDIA_BUTTON_BINDER, mediaButtons)
         val result = YinProtocol.call(service, YinProtocol.OPEN, args)
         if (!result.getBoolean("ok")) {
             runCatching { result.getParcelable<ParcelFileDescriptor>("fd")?.close() }
@@ -102,6 +131,7 @@ class YinConnector private constructor(private val context: Context) {
             return YinChannel(service, token, fd, result, this, rate, channels, encoding).also {
                 val output = "${result.getInt("rate") / 1000f} kHz · ${pcmName(result.getInt("encoding"))}\n${result.getString("message").orEmpty()}"
                 protectedSession = true
+                currentMediaButtons = mediaButtons
                 _state.update { it.copy(active = true, enabled = true, output = output) }
             }
         } catch (failure: Exception) {
@@ -109,7 +139,10 @@ class YinConnector private constructor(private val context: Context) {
             fd.close(); throw failure
         }
     }
-    fun stopped() { _state.update { it.copy(active = protectedSession && it.enabled != false) } }
+    fun stopped() {
+        currentMediaButtons = null
+        _state.update { it.copy(active = protectedSession && it.enabled != false) }
+    }
     fun failed(reason: String) {
         retryAfter = SystemClock.elapsedRealtime() + 300
         _state.update { it.copy(ready = false, active = protectedSession, message = "$reason · esperando a Yin en silencio") }

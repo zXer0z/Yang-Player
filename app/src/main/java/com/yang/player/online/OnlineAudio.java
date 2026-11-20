@@ -53,8 +53,14 @@ final class OnlineAudio {
         streams.put(key,candidate);return candidate;
     }
     static final class SearchPage {
-        final List<OnlineTrack> songs;final String correctedQuery;
-        SearchPage(List<OnlineTrack> songs,String correctedQuery){this.songs=songs;this.correctedQuery=correctedQuery==null?"":correctedQuery;}
+        final List<OnlineTrack> songs;
+        final String correctedQuery;
+        final Page nextPage;
+        SearchPage(List<OnlineTrack> songs, String correctedQuery, Page nextPage) {
+            this.songs = songs;
+            this.correctedQuery = correctedQuery == null ? "" : correctedQuery;
+            this.nextPage = Page.isValid(nextPage) ? nextPage : null;
+        }
     }
     static List<String> suggestions(String query)throws Exception{
         init();String text=query.trim();if(text.length()<2||text.length()>200||text.contains("://"))return Collections.emptyList();
@@ -79,7 +85,7 @@ final class OnlineAudio {
             Uri link=Uri.parse(query);String host=link.getHost();if(host==null||!(host.equals("youtu.be")||host.equals("youtube.com")||host.endsWith(".youtube.com")))throw new IOException("Pega un enlace de YouTube o escribe una búsqueda.");
             if(host.equals("youtu.be"))video=link.getLastPathSegment();else if(link.getPath()!=null&&(link.getPath().startsWith("/shorts/")||link.getPath().startsWith("/live/")))video=link.getLastPathSegment();else video=link.getQueryParameter("v");
             if(video==null||!video.matches("[A-Za-z0-9_-]{11}"))throw new IOException("Usa un enlace a un vídeo individual de YouTube.");
-            Uri uri=Uri.parse("yangyoutube://watch/"+video);StreamInfo info=StreamInfo.getInfo(service,watch(uri));if(!info.getThumbnails().isEmpty())images.put(video,info.getThumbnails().get(0).getUrl());songs.add(new OnlineTrack(uri,info.getName(),info.getUploaderName(),"YouTube",video,info.getDuration()*1000L));return new SearchPage(songs,"");
+            Uri uri=Uri.parse("yangyoutube://watch/"+video);StreamInfo info=StreamInfo.getInfo(service,watch(uri));if(!info.getThumbnails().isEmpty())images.put(video,info.getThumbnails().get(0).getUrl());songs.add(new OnlineTrack(uri,info.getName(),info.getUploaderName(),"YouTube",video,info.getDuration()*1000L));return new SearchPage(songs,"",null);
         }
         SearchExtractor extractor=service.getSearchExtractor(query,Collections.singletonList("videos"),"");
         // This overload of SearchInfo.getInfo reads an already fetched extractor.
@@ -87,13 +93,32 @@ final class OnlineAudio {
         // internally and returns an empty list instead of throwing them.
         extractor.fetchPage();
         SearchInfo found=SearchInfo.getInfo(extractor);
-        if(found.getRelatedItems().isEmpty()&&!found.getErrors().isEmpty()){
-            Throwable cause=found.getErrors().get(0);
+        return searchResults(found.getRelatedItems(), found.getErrors(), found.getSearchSuggestion(), found.isCorrectedSearch(), found.getNextPage());
+    }
+    static SearchPage searchMore(String query, Page page) throws Exception {
+        init();
+        StreamingService service = NewPipe.getService(0);
+        var handler = service.getSearchQHFactory().fromQuery(query, Collections.singletonList("videos"), "");
+        var more = SearchInfo.getMoreItems(service, handler, page);
+        return searchResults(more.getItems(), more.getErrors(), "", false, more.getNextPage());
+    }
+    private static SearchPage searchResults(List<InfoItem> items, List<Throwable> errors, String suggestion,
+                                            boolean corrected, Page nextPage) throws IOException {
+        if(items.isEmpty()&&!errors.isEmpty()){
+            Throwable cause=errors.get(0);
             android.util.Log.w("V60Online","No search results could be extracted",cause);
             throw new IOException("No se pudieron leer los resultados de YouTube. Revisa la conexión; el servicio puede requerir actualizar NewPipeExtractor. ("+cause.getClass().getSimpleName()+")",cause);
         }
-        for(InfoItem item:found.getRelatedItems())if(item instanceof StreamInfoItem){StreamInfoItem stream=(StreamInfoItem)item;if(stream.getStreamType()!=StreamType.VIDEO_STREAM)continue;Uri link=Uri.parse(stream.getUrl());String key=link.getQueryParameter("v");if(key==null||!key.matches("[A-Za-z0-9_-]{11}"))continue;Uri uri=Uri.parse("yangyoutube://watch/"+key);songs.add(new OnlineTrack(uri,stream.getName(),stream.getUploaderName(),"YouTube",key,Math.max(0,stream.getDuration())*1000L));if(!stream.getThumbnails().isEmpty())images.put(key,stream.getThumbnails().get(0).getUrl());if(songs.size()>=30)break;}
-        return new SearchPage(songs,found.isCorrectedSearch()?found.getSearchSuggestion():"");
+        List<OnlineTrack> songs = new ArrayList<>();
+        for (InfoItem item : items) {
+            if (!(item instanceof StreamInfoItem stream) || stream.getStreamType() != StreamType.VIDEO_STREAM) continue;
+            String key = Uri.parse(stream.getUrl()).getQueryParameter("v");
+            if (key == null || !key.matches("[A-Za-z0-9_-]{11}")) continue;
+            Uri uri = Uri.parse("yangyoutube://watch/" + key);
+            songs.add(new OnlineTrack(uri, stream.getName(), stream.getUploaderName(), "YouTube", key, Math.max(0, stream.getDuration()) * 1000L));
+            if (!stream.getThumbnails().isEmpty()) images.put(key, stream.getThumbnails().get(0).getUrl());
+        }
+        return new SearchPage(songs, corrected ? suggestion : "", nextPage);
     }
     static byte[] artwork(Uri uri)throws Exception{String image=images.get(id(uri));if(image==null)return null;HttpURLConnection c=(HttpURLConnection)new URL(image).openConnection();c.setConnectTimeout(12000);c.setReadTimeout(12000);try(InputStream in=c.getInputStream()){return read(in,4*1024*1024);}finally{c.disconnect();}}
     private static byte[] read(InputStream in,int limit)throws IOException{if(in==null)return new byte[0];ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] data=new byte[8192];int n;while((n=in.read(data))!=-1){if(out.size()+n>limit)throw new IOException("La respuesta online es demasiado grande.");out.write(data,0,n);}return out.toByteArray();}
@@ -107,4 +132,3 @@ final class OnlineAudio {
         }
     }
 }
-

@@ -56,11 +56,11 @@ import com.yang.player.ui.components.ArtworkAtmosphere
 import com.yang.player.ui.components.PlayerDock
 import com.yang.player.ui.components.FloatingMiniPlayer
 import com.yang.player.ui.components.NavigationTab
+import com.yang.player.ui.components.LibrarySourceSelector
+import com.yang.player.model.LibrarySource
 import com.yang.player.ui.screens.FullPlayerModal
 import com.yang.player.ui.screens.HiFiAudioScreen
 import com.yang.player.ui.screens.HomeScreen
-import com.yang.player.ui.screens.OnlineScreen
-import com.yang.player.ui.screens.AccountScreen
 import com.yang.player.ui.screens.YouScreen
 import com.yang.player.ui.screens.SongsLibraryScreen
 import com.yang.player.ui.theme.BackgroundDark
@@ -167,6 +167,11 @@ fun YangPlayerRootApp(viewModel: PlayerViewModel, onRescan: () -> Unit = { viewM
 @Composable
 private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) {
     val screenStateHolder = rememberSaveableStateHolder()
+    val librarySource by viewModel.librarySource.collectAsState()
+    val isYouTube = librarySource == LibrarySource.YOUTUBE
+    val sourceSelector: @Composable () -> Unit = {
+        LibrarySourceSelector(librarySource, viewModel::selectLibrarySource)
+    }
     val cloudMode by viewModel.cloudMode.collectAsState()
     val cloudLoading by viewModel.cloudLoading.collectAsState()
     val cloudStatus by viewModel.cloudStatus.collectAsState()
@@ -281,10 +286,10 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                     onCreateCloudPlaylist = viewModel::createCloudPlaylist,
                     onAddToCloudPlaylist = viewModel::addToCloudPlaylist)
             } else { screenStateHolder.SaveableStateProvider(
-                if (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES) "$selectedTab-$cloudMode" else selectedTab.name
+                if (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES) "$selectedTab-$librarySource" else selectedTab.name
             ) {
             Column(Modifier.fillMaxSize()) {
-                if (cloudMode && (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES)) {
+                if (librarySource == LibrarySource.NAVIDROME && (selectedTab == NavigationTab.INICIO || selectedTab == NavigationTab.CANCIONES)) {
                     when {
                         cloudLoading && selectedTab == NavigationTab.INICIO ->
                             androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -313,25 +318,33 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         allPlaylists = playlists,
                         currentPlayingSongId = playerState.currentSong?.id,
                         isPlaying = playerState.isPlaying,
-                        onSongSelected = { song, queue -> viewModel.playSong(song, queue) },
+                        onSongSelected = if (isYouTube) viewModel::playOnlineSong else viewModel::playSong,
                         onAlbumSelected = viewModel::openAlbum,
                         onArtistSelected = viewModel::openArtist,
                         onPlayToggle = { song -> viewModel.toggleFeaturedSong(song) },
                         onProfileClick = { viewModel.selectTab(NavigationTab.TU) },
                         onViewAllFavorites = viewModel::openFavorites,
                         isCloudMode = cloudMode,
+                        sourceSelector = sourceSelector,
+                        youtube = viewModel.online.takeIf { isYouTube },
+                        onConnectYouTube = viewModel::openYouTubeAccount,
+                        onOpenYouTubePlaylist = { playlist ->
+                            viewModel.online.openPlaylist(playlist)
+                            viewModel.selectTab(NavigationTab.CANCIONES)
+                        }
                     )
                 }
                 NavigationTab.CANCIONES -> {
+                    val shownFavorites by (if (isYouTube) viewModel.youtubeFavoriteSongs else viewModel.favoriteSongs).collectAsState()
                     SongsLibraryScreen(
                         onAudioSettings = { viewModel.selectTab(NavigationTab.HI_FI) },
                         requestSearchFocus = requestSearchFocus,
                         onSearchFocusHandled = { requestSearchFocus = false },
                         isPlaying = playerState.isPlaying,
                         songs = allSongs,
-                        favoriteSongs = favoriteSongs,
+                        favoriteSongs = shownFavorites,
                         currentPlayingSongId = playerState.currentSong?.id,
-                        onSongSelected = { song, queue -> viewModel.playSong(song, queue) },
+                        onSongSelected = if (isYouTube) viewModel::playOnlineSong else viewModel::playSong,
                         onPlayNext = { song -> viewModel.playNext(song) },
                         onAddToQueue = { song -> viewModel.addToQueue(song) },
                         onToggleFavorite = { song -> viewModel.toggleFavorite(song) },
@@ -339,8 +352,8 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onViewArtist = viewModel::openArtist,
                         cloudDownloadName = viewModel::cloudDownloadName,
                         onCloudDownload = viewModel::downloadCloudSong,
-                        isCloudMode = cloudMode,
-                        isCloudRefreshing = cloudLoading,
+                        isCloudMode = librarySource == LibrarySource.NAVIDROME,
+                        isCloudRefreshing = librarySource == LibrarySource.NAVIDROME && cloudLoading,
                         onCloudRefresh = viewModel::reloadCloudLibrary,
                         downloadedCloudIds = downloadedCloudIds,
                         streamQuality = cloudStreamQuality,
@@ -349,26 +362,14 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onCreateCloudPlaylist = viewModel::createCloudPlaylist,
                         onAddToCloudPlaylist = viewModel::addToCloudPlaylist,
                         onStartRadio = if (cloudMode) viewModel::startCloudRadio else null,
+                        sourceSelector = sourceSelector,
+                        youtube = viewModel.online.takeIf { isYouTube },
+                        playbackError = playerState.playbackError.takeIf { isYouTube && playerState.currentSong?.isOnline == true },
+                        onRetryPlayback = viewModel::retryPlayback
                     )
                 }
                 NavigationTab.HI_FI -> {
                     HiFiAudioScreen(playerState = playerState, bottomContentPadding = dockHeight + 12.dp)
-                }
-                NavigationTab.ONLINE -> {
-                    OnlineScreen(
-                        online = viewModel.online,
-                        currentSongId = playerState.currentSong?.id,
-                        isPlaying = playerState.isPlaying,
-                        favoriteIds = favoriteSongs.map { it.id }.toSet(),
-                        onPlay = { song, queue -> viewModel.playOnlineSong(song, queue) },
-                        onPlayNext = viewModel::playNext,
-                        onAddToQueue = viewModel::addToQueue,
-                        onFavorite = viewModel::toggleFavorite,
-                        onAccount = { viewModel.selectTab(NavigationTab.TU) },
-                        bottomContentPadding = dockHeight + 12.dp,
-                        playbackError = playerState.playbackError.takeIf { playerState.currentSong?.isOnline == true },
-                        onRetryPlayback = viewModel::retryPlayback
-                    )
                 }
                 NavigationTab.TU -> {
                     YouScreen(viewModel, dockHeight + 12.dp,

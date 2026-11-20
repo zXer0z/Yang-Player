@@ -45,7 +45,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -62,6 +61,8 @@ import com.yang.player.data.ThemeMode
 import com.yang.player.model.Song
 import com.yang.player.ui.theme.LocalArtworkAccent
 import com.yang.player.ui.theme.BackgroundDark
+import com.yang.player.ui.theme.ArtworkPalette
+import com.yang.player.ui.theme.rememberArtworkPalette
 import com.yang.player.ui.theme.SurfaceCard
 import com.yang.player.ui.theme.TextMuted
 import com.yang.player.ui.theme.TextWhite
@@ -84,6 +85,7 @@ fun SongOptionsMenuModal(
     cloudPlaylists: List<com.yang.player.data.CloudPlaylistSummary> = emptyList(),
     onCreateCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
     onAddToCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
+    artworkPalette: ArtworkPalette? = null,
     playbackControls: (@Composable () -> Unit)? = null
 ) {
     if (song == null) return
@@ -126,9 +128,12 @@ fun SongOptionsMenuModal(
 
     val appearancePrefs = remember { AppearancePreferences.get(context) }
     val appearanceConfig by appearancePrefs.config.collectAsState()
-    val sheetBg = when (appearanceConfig.themeMode) {
-        ThemeMode.OLED_BLACK -> Color(0xFF0A0A0A)
-        else -> lerp(BackgroundDark, accent, 0.08f)
+    val themeMode = appearanceConfig.themeMode
+    val palette = artworkPalette ?: if (themeMode == ThemeMode.DYNAMIC) rememberArtworkPalette(song) else ArtworkPalette()
+    val sheetBg = when (themeMode) {
+        ThemeMode.OLED_BLACK -> Color.Black
+        ThemeMode.CUSTOM_ACCENT -> lerp(BackgroundDark, accent, .16f)
+        ThemeMode.DYNAMIC -> lerp(BackgroundDark, palette.topColor, .5f)
     }
 
     ModalBottomSheet(
@@ -145,184 +150,185 @@ fun SongOptionsMenuModal(
             )
         }
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(accent.copy(alpha = 0.08f), Color.Transparent)))
-                .padding(bottom = 32.dp)
-        ) {
-            // Header: Clean thumbnail, title and artist — album
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceCard),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MusicNote,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.2f),
-                        modifier = Modifier.size(24.dp)
-                    )
-
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = song.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(14.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = song.title,
-                        color = TextWhite,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        text = "${song.artist} — ${song.album}",
-                        color = TextMuted,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            HorizontalDivider(
-                color = Color(0x1FFFFFFF),
-                thickness = 0.5.dp,
-                modifier = Modifier.padding(vertical = 6.dp)
-            )
-
-            // Scrollable Options List
+        Box(Modifier.fillMaxWidth()) {
+            ArtworkBlurBackdrop(palette, themeMode, accent, modifier = Modifier.matchParentSize(), dim = .49f)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 32.dp)
             ) {
-                playbackControls?.invoke()
-                // 1. Reproducir a continuación
-                OptionItem(
-                    icon = Icons.Default.PlayArrow,
-                    label = "Reproducir a continuación",
-                    onClick = {
-                        onPlayNext(song)
-                        onDismiss()
+                // Header: Clean thumbnail, title and artist — album
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceCard),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.2f),
+                            modifier = Modifier.size(24.dp)
+                        )
+
+                        AsyncImage(
+                            model = imageRequest,
+                            contentDescription = song.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
                     }
-                )
 
-                // 2. Añadir al final de la cola
-                OptionItem(
-                    icon = Icons.AutoMirrored.Filled.QueueMusic,
-                    label = "Añadir al final de la cola",
-                    onClick = {
-                        onAddToQueue(song)
-                        onDismiss()
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = song.title,
+                            color = TextWhite,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Spacer(modifier = Modifier.height(2.dp))
+
+                        Text(
+                            text = "${song.artist} — ${song.album}",
+                            color = TextMuted,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                )
-
-                if (isCloud && onStartRadio != null) OptionItem(
-                    icon = Icons.Rounded.GraphicEq,
-                    label = "Iniciar radio similar",
-                    onClick = {
-                        onStartRadio(song)
-                        onDismiss()
-                    }
-                )
-
-                // 3. Añadir a playlist...
-                OptionItem(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    label = "Añadir a playlist...",
-                    onClick = { playlistPicker = true }
-                )
-
-                // 4. Añadir a favoritos / Eliminar de favoritos
-                OptionItem(
-                    icon = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    label = if (isFavorite) "Eliminar de favoritos" else "Añadir a favoritos",
-                    iconTint = accent,
-                    onClick = {
-                        onToggleFavorite(song)
-                        onDismiss()
-                    }
-                )
-
-                // 5. Ver álbum
-                OptionItem(
-                    icon = Icons.Default.Album,
-                    label = "Ver álbum («${song.album}»)",
-                    onClick = {
-                        onViewAlbum(song.album)
-                        onDismiss()
-                    }
-                )
-
-                // 6. Ver artista
-                OptionItem(
-                    icon = Icons.Outlined.Person,
-                    label = "Ver artista («${song.artist}»)",
-                    onClick = {
-                        onViewArtist(song.artist)
-                        onDismiss()
-                    }
-                )
-
-                if (!song.isOnline && !isCloud) {
-                    OptionItem(
-                        icon = Icons.Default.Edit,
-                        label = "Editar etiquetas y carátula",
-                        onClick = { completionKind = com.yang.player.data.CompletionKind.METADATA }
-                    )
-                    OptionItem(
-                        icon = Icons.Default.MusicNote,
-                        label = "Buscar o editar letras",
-                        onClick = { completionKind = com.yang.player.data.CompletionKind.LYRICS }
-                    )
                 }
 
-                if (onDownload != null) OptionItem(
-                    icon = Icons.Default.SaveAlt,
-                    label = "Descargar al teléfono",
-                    onClick = { onDownload(); onDismiss() }
+                HorizontalDivider(
+                    color = Color(0x1FFFFFFF),
+                    thickness = 0.5.dp,
+                    modifier = Modifier.padding(vertical = 6.dp)
                 )
 
-                // 7. Compartir canción
-                if (!isCloud) OptionItem(
-                    icon = Icons.Default.Share,
-                    label = "Compartir canción",
-                    onClick = {
-                        shareAudioTrack(context, song)
-                        onDismiss()
-                    }
-                )
+                // Scrollable Options List
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    playbackControls?.invoke()
+                    // 1. Reproducir a continuación
+                    OptionItem(
+                        icon = Icons.Default.PlayArrow,
+                        label = "Reproducir a continuación",
+                        onClick = {
+                            onPlayNext(song)
+                            onDismiss()
+                        }
+                    )
 
-                // 8. Eliminar permanentemente
-                if (!song.isOnline && !isCloud) OptionItem(
-                    icon = Icons.Default.DeleteOutline,
-                    label = "Eliminar permanentemente",
-                    iconTint = Color(0xFFFF7777),
-                    onClick = {
-                        deleteSong(song)
-                        onDismiss()
+                    // 2. Añadir al final de la cola
+                    OptionItem(
+                        icon = Icons.AutoMirrored.Filled.QueueMusic,
+                        label = "Añadir al final de la cola",
+                        onClick = {
+                            onAddToQueue(song)
+                            onDismiss()
+                        }
+                    )
+
+                    if (isCloud && onStartRadio != null) OptionItem(
+                        icon = Icons.Rounded.GraphicEq,
+                        label = "Iniciar radio similar",
+                        onClick = {
+                            onStartRadio(song)
+                            onDismiss()
+                        }
+                    )
+
+                    // 3. Añadir a playlist...
+                    OptionItem(
+                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                        label = "Añadir a playlist...",
+                        onClick = { playlistPicker = true }
+                    )
+
+                    // 4. Añadir a favoritos / Eliminar de favoritos
+                    OptionItem(
+                        icon = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        label = if (isFavorite) "Eliminar de favoritos" else "Añadir a favoritos",
+                        iconTint = accent,
+                        onClick = {
+                            onToggleFavorite(song)
+                            onDismiss()
+                        }
+                    )
+
+                    if (!song.isOnline) {
+                        OptionItem(
+                            icon = Icons.Default.Album,
+                            label = "Ver álbum («${song.album}»)",
+                            onClick = {
+                                onViewAlbum(song.album)
+                                onDismiss()
+                            }
+                        )
+                        OptionItem(
+                            icon = Icons.Outlined.Person,
+                            label = "Ver artista («${song.artist}»)",
+                            onClick = {
+                                onViewArtist(song.artist)
+                                onDismiss()
+                            }
+                        )
                     }
-                )
+
+                    if (!song.isOnline && !isCloud) {
+                        OptionItem(
+                            icon = Icons.Default.Edit,
+                            label = "Editar etiquetas y carátula",
+                            onClick = { completionKind = com.yang.player.data.CompletionKind.METADATA }
+                        )
+                        OptionItem(
+                            icon = Icons.Default.MusicNote,
+                            label = "Buscar o editar letras",
+                            onClick = { completionKind = com.yang.player.data.CompletionKind.LYRICS }
+                        )
+                    }
+
+                    if (onDownload != null) OptionItem(
+                        icon = Icons.Default.SaveAlt,
+                        label = "Descargar al teléfono",
+                        onClick = { onDownload(); onDismiss() }
+                    )
+
+                    // 7. Compartir canción
+                    if (!isCloud) OptionItem(
+                        icon = Icons.Default.Share,
+                        label = "Compartir canción",
+                        onClick = {
+                            shareAudioTrack(context, song)
+                            onDismiss()
+                        }
+                    )
+
+                    // 8. Eliminar permanentemente
+                    if (!song.isOnline && !isCloud) OptionItem(
+                        icon = Icons.Default.DeleteOutline,
+                        label = "Eliminar permanentemente",
+                        iconTint = Color(0xFFFF7777),
+                        onClick = {
+                            deleteSong(song)
+                            onDismiss()
+                        }
+                    )
+                }
             }
         }
     }
@@ -371,4 +377,3 @@ private fun shareAudioTrack(context: Context, song: Song) {
         context.startActivity(Intent.createChooser(shareIntent, "Compartir «${song.title}»"))
     } catch (_: Exception) {}
 }
-

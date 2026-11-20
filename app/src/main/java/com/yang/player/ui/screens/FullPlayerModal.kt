@@ -122,7 +122,9 @@ import com.yang.player.ui.components.SongOptionsMenuModal
 import com.yang.player.ui.theme.SurfaceCard
 import com.yang.player.ui.theme.ArtworkPalette
 import com.yang.player.ui.theme.BackgroundDark
-import com.yang.player.ui.components.ArtworkAtmosphere
+import com.yang.player.ui.components.ArtworkBlurBackdrop
+import com.yang.player.data.ThemeMode
+import com.yang.player.ui.theme.LocalArtworkAccent
 import com.yang.player.ui.components.LyricsPane
 import com.yang.player.ui.components.QueuePane
 import kotlinx.coroutines.delay
@@ -185,7 +187,9 @@ fun FullPlayerModal(
     val yinConnected = yin.ready
     val appearancePrefs = remember { com.yang.player.data.AppearancePreferences.get(context) }
     val appearanceConfig by appearancePrefs.config.collectAsState()
-    val beatActive = yinConnected || (appearanceConfig.beatReactiveAtmosphere && appearanceConfig.themeMode == com.yang.player.data.ThemeMode.DYNAMIC)
+    val themeMode = appearanceConfig.themeMode
+    val themeAccent = LocalArtworkAccent.current
+    val beatActive = yinConnected || (appearanceConfig.beatReactiveAtmosphere && themeMode == ThemeMode.DYNAMIC)
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle, beatActive, isPlaying, showLyrics, showQueue) {
         if (beatActive && isPlaying && !showLyrics && !showQueue) {
@@ -291,9 +295,12 @@ fun FullPlayerModal(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            ArtworkAtmosphere(palette, moving = !beatActive)
-            if (beatActive && !showLyrics && !showQueue) {
-                YinBeatAtmosphere(isPlaying, androidx.compose.ui.graphics.lerp(palette.topColor, palette.accentColor, .25f))
+            ArtworkBlurBackdrop(palette, themeMode, themeAccent, modifier = Modifier.matchParentSize())
+            if (beatActive && themeMode != ThemeMode.OLED_BLACK && !showLyrics && !showQueue) {
+                val beatColor = if (themeMode == ThemeMode.DYNAMIC) {
+                    androidx.compose.ui.graphics.lerp(palette.topColor, palette.accentColor, .25f)
+                } else themeAccent
+                YinBeatAtmosphere(isPlaying, beatColor)
             }
 
             if (showLyrics) {
@@ -687,6 +694,7 @@ fun FullPlayerModal(
             cloudPlaylists = cloudPlaylists,
             onCreateCloudPlaylist = onCreateCloudPlaylist,
             onAddToCloudPlaylist = onAddToCloudPlaylist,
+            artworkPalette = palette,
             playbackControls = { com.yang.player.ui.components.PlaybackModesRow(isShuffle, repeatMode, onShuffle, onRepeat) }
         )
     }

@@ -28,7 +28,9 @@ Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen
 - Ver un extracto de Wikipedia sobre álbumes y artistas, con enlace a la fuente y caché local.
 - Usar aleatorio, repetir cola/canción y programar una pausa por minutos o al terminar la pista, desde los tres puntos del player.
 - Consultar estadísticas locales de tiempo de escucha, canciones y artistas.
-- Buscar y reproducir audio online mediante NewPipeExtractor y conectar una cuenta de YouTube Music para el perfil y el catálogo personal.
+- Elegir Dispositivo, Navidrome o YouTube en Inicio y Canciones. En YouTube, Inicio muestra recomendaciones y playlists, y Canciones ofrece autosugerencias y resultados paginados.
+- Deslizar hacia abajo en Inicio para actualizar YouTube. Conectar una cuenta añade sus recomendaciones y playlists personales.
+- Usar un fondo desenfocado basado en la carátula en el reproductor y su menú con el tema dinámico. Los modos OLED y acento personalizado aplican sus propios colores.
 - Eliminar un archivo de audio permanentemente con confirmación de Android y actualizar sus referencias en la biblioteca.
 
 ## Tu sonido
@@ -40,6 +42,7 @@ Los controles de Hi-Fi permiten editar perfiles para altavoz, Bluetooth, Jack/AU
 - Formato PCM, frecuencia y búfer por perfil; telemetría que distingue el formato solicitado del flujo abierto.
 - El monitor muestra espectro, pico y RMS del PCM de entrada. El factor de cresta es la diferencia entre pico y RMS medidos en el mismo bloque de 400 ms.
 - Con Yin conectado, el estilo vinilo puede mostrar un espectro alrededor de la carátula. Las barras de volumen y progreso tienen un brillo animado, y Hi-Fi muestra el acceso a los controles de Yin.
+- Con una versión de Yin compatible con el puente de botones multimedia, las órdenes de los auriculares llegan a Yang cuando Yin administra la salida.
 
 La telemetría describe el flujo abierto por la aplicación. La resolución física del DAC y el códec Bluetooth dependen del dispositivo.
 

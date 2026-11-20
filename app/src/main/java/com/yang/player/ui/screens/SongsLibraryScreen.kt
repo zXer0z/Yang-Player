@@ -26,8 +26,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -64,22 +66,26 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.selected
@@ -90,6 +96,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yang.player.model.Song
+import com.yang.player.online.OnlineCoordinator
+import com.yang.player.online.OnlineState
 import com.yang.player.ui.components.SongListItem
 import com.yang.player.ui.components.SongOptionsMenuModal
 import com.yang.player.ui.theme.LocalArtworkAccent
@@ -153,8 +161,15 @@ fun SongsLibraryScreen(
     onCreateCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
     onAddToCloudPlaylist: ((String, List<Song>) -> Unit)? = null,
     onStartRadio: ((Song) -> Unit)? = null,
+    sourceSelector: @Composable () -> Unit = {},
+    youtube: OnlineCoordinator? = null,
+    playbackError: String? = null,
+    onRetryPlayback: () -> Unit = {},
 ) {
+    val youtubeState = youtube?.state?.collectAsState()?.value
+    val isYouTube = youtube != null
     val searchFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(requestSearchFocus) {
         if (requestSearchFocus) {
@@ -187,7 +202,15 @@ fun SongsLibraryScreen(
             .apply()
     }
     fun indexLabel(song: Song) = when(sortKey) { "artist" -> song.artist; "album" -> song.album; else -> song.title }
-    var searchQuery by remember { mutableStateOf("") }
+    var localQuery by rememberSaveable { mutableStateOf("") }
+    val searchQuery = youtubeState?.query ?: localQuery
+    var searchFocused by remember { mutableStateOf(false) }
+    fun submitYouTubeSearch(query: String) {
+        if (youtube == null || query.isBlank()) return
+        youtube.search(query)
+        keyboard?.hide()
+        focusManager.clearFocus()
+    }
     var selectedSongForOptions by remember { mutableStateOf<Song?>(null) }
     var pendingCloudDownload by remember { mutableStateOf<Song?>(null) }
     val downloadPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -218,7 +241,7 @@ fun SongsLibraryScreen(
     val hasCustomOrder = effectiveSortKey != "title" || descending
 
     val favoriteIds = remember(favoriteSongs) { favoriteSongs.map { it.id }.toSet() }
-    val filteredSongs = remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded, downloadedCloudIds, effectiveSortKey, descending) {
+    val filteredSongs = if (youtubeState != null) youtubeState.results else remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded, downloadedCloudIds, effectiveSortKey, descending) {
         val hasQuery = searchQuery.isNotBlank()
         val query = searchQuery.trim()
         val matching = if (!onlyFavorites && !onlyHiRes && !effectiveOnlyDownloaded && !hasQuery) {
@@ -255,7 +278,15 @@ fun SongsLibraryScreen(
             }
             if (descending) matching.sortedWith(comparator.reversed()) else matching.sortedWith(comparator)
     }
-    LaunchedEffect(searchQuery, effectiveSortKey, descending, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded) { listState.scrollToItem(0) }
+    if (isYouTube) {
+        LaunchedEffect(youtubeState?.searching, youtubeState?.showingResults, youtubeState?.resultTitle) {
+            if (youtubeState?.searching == true || youtubeState?.showingResults == false) listState.scrollToItem(0)
+        }
+    } else {
+        LaunchedEffect(searchQuery, effectiveSortKey, descending, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded) {
+            listState.scrollToItem(0)
+        }
+    }
 
     // Alphabet index list
     val alphabet = remember { listOf("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "#") }
@@ -301,7 +332,13 @@ fun SongsLibraryScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (hasActiveFilter || searchQuery.isNotBlank()) "${filteredSongs.size} de ${songs.size} canciones" else "${filteredSongs.size} canciones",
+                        text = when {
+                            youtubeState?.searching == true -> "Cargando resultados…"
+                            isYouTube && youtubeState?.showingResults == true -> "${filteredSongs.size} resultados"
+                            isYouTube -> "Búsqueda de YouTube"
+                            hasActiveFilter || searchQuery.isNotBlank() -> "${filteredSongs.size} de ${songs.size} canciones"
+                            else -> "${filteredSongs.size} canciones"
+                        },
                         color = TextMuted,
                         fontSize = 13.sp
                     )
@@ -311,28 +348,29 @@ fun SongsLibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = { listPanel = SongListPanel.SORT },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Sort,
-                            contentDescription = "Ordenar canciones",
-                            tint = if (hasCustomOrder) accent else TextMuted,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { listPanel = SongListPanel.OPTIONS },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.FilterAlt,
-                            contentDescription = "Filtros y opciones de canciones",
-                            tint = if (hasActiveFilter) accent else TextMuted,
-                            modifier = Modifier.size(22.dp)
-                        )
+                    if (!isYouTube) {
+                        IconButton(
+                            onClick = { listPanel = SongListPanel.SORT },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Sort,
+                                contentDescription = "Ordenar canciones",
+                                tint = if (hasCustomOrder) accent else TextMuted,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { listPanel = SongListPanel.OPTIONS },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.FilterAlt,
+                                contentDescription = "Filtros y opciones de canciones",
+                                tint = if (hasActiveFilter) accent else TextMuted,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                     IconButton(
                         onClick = onAudioSettings,
@@ -348,6 +386,8 @@ fun SongsLibraryScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+            sourceSelector()
             Spacer(modifier = Modifier.height(12.dp))
 
             // Compact Search Bar (Smaller height ~40dp as requested)
@@ -365,27 +405,34 @@ fun SongsLibraryScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = null,
-                        tint = TextMuted,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    if (isYouTube) {
+                        IconButton(onClick = { submitYouTubeSearch(searchQuery) }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Search, "Buscar en YouTube", tint = accent, modifier = Modifier.size(18.dp))
+                        }
+                    } else {
+                        Icon(Icons.Default.Search, null, tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
 
                     Spacer(modifier = Modifier.width(10.dp))
 
                     BasicTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = { if (youtube != null) youtube.changeQuery(it) else localQuery = it },
                         textStyle = TextStyle(color = TextWhite, fontSize = 13.sp,
                             lineHeight = 18.sp, fontWeight = FontWeight.Normal),
                         cursorBrush = SolidColor(accent), singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { keyboard?.hide() }),
-                        modifier = Modifier.weight(1f).focusRequester(searchFocus),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                            if (isYouTube) submitYouTubeSearch(searchQuery) else keyboard?.hide()
+                        }),
+                        modifier = Modifier.weight(1f).focusRequester(searchFocus).onFocusChanged {
+                            if (it.isFocused && !searchFocused) youtube?.changeQuery(searchQuery)
+                            searchFocused = it.isFocused
+                        },
                         decorationBox = { field ->
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-                                if (searchQuery.isEmpty()) Text("Buscar canciones, artistas o álbumes",
+                                if (searchQuery.isEmpty()) Text(
+                                    if (isYouTube) "Canción, artista o enlace de YouTube" else "Buscar canciones, artistas o álbumes",
                                     color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp,
                                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                                 field()
@@ -400,7 +447,7 @@ fun SongsLibraryScreen(
                             tint = TextMuted,
                             modifier = Modifier
                                 .size(18.dp)
-                                .clickable { searchQuery = "" }
+                                .clickable { if (youtube != null) youtube.clearSearch() else localQuery = "" }
                         )
                     }
                 }
@@ -424,17 +471,19 @@ fun SongsLibraryScreen(
                             .fillMaxHeight(),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 185.dp)
                     ) {
-                        if (filteredSongs.isEmpty() && !isCloudRefreshing) item {
+                        if (youtube != null && youtubeState != null) {
+                            youTubeSearchItems(youtubeState, searchFocused, playbackError, onRetryPlayback, youtube, ::submitYouTubeSearch)
+                        } else if (filteredSongs.isEmpty() && !isCloudRefreshing) item {
                             Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("No hay canciones con estas opciones", color = TextMuted)
-                                TextButton(onClick = { searchQuery = ""; onlyFavorites = false; onlyHiRes = false; onlyDownloaded = false; saveOptions() }) { Text("Mostrar todas", color = accent) }
+                                TextButton(onClick = { localQuery = ""; onlyFavorites = false; onlyHiRes = false; onlyDownloaded = false; saveOptions() }) { Text("Mostrar todas", color = accent) }
                             }
                         }
-                        items(
+                        itemsIndexed(
                             items = filteredSongs,
-                            key = { it.id },
-                            contentType = { "song_row" }
-                        ) { song ->
+                            key = { index, song -> if (youtubeState?.activePlaylist != null) "$index:${song.id}" else song.id },
+                            contentType = { _, _ -> "song_row" }
+                        ) { _, song ->
                             SongListItem(
                                 song = song,
                                 isPlayingThisSong = song.id == currentPlayingSongId,
@@ -443,11 +492,27 @@ fun SongsLibraryScreen(
                                 onOptionsClick = { selectedSongForOptions = song }
                             )
                         }
-
+                        if (youtube != null && youtubeState != null && youtubeState.hasMoreResults) {
+                            item(key = "youtube_more") {
+                                Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    youtubeState.moreError?.let { Text(it, color = TextMuted) }
+                                    TextButton(enabled = !youtubeState.loadingMore, onClick = youtube::searchMore) {
+                                        Text(
+                                            when {
+                                                youtubeState.loadingMore -> "Cargando más…"
+                                                youtubeState.moreError != null -> "Reintentar"
+                                                else -> "Cargar más resultados"
+                                            },
+                                            color = accent
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Fast alphabet jump scrubber
-                    if (searchQuery.isEmpty() && effectiveSortKey != "duration" && effectiveSortKey != "recent" && effectiveSortKey != "bpm" && !descending && filteredSongs.isNotEmpty()) {
+                    if (!isYouTube && searchQuery.isEmpty() && effectiveSortKey != "duration" && effectiveSortKey != "recent" && effectiveSortKey != "bpm" && !descending && filteredSongs.isNotEmpty()) {
                         Box(
                             modifier = Modifier
                                 .padding(end = 4.dp, top = 8.dp, bottom = 190.dp)
@@ -703,6 +768,70 @@ fun SongsLibraryScreen(
                 }
             )
         }
+    }
+}
+
+private fun LazyListScope.youTubeSearchItems(
+    state: OnlineState,
+    focused: Boolean,
+    playbackError: String?,
+    onRetryPlayback: () -> Unit,
+    youtube: OnlineCoordinator,
+    onSubmit: (String) -> Unit
+) {
+    if (focused) {
+        items(state.suggestions, key = { "suggestion:$it" }) { suggestion ->
+            DropdownMenuItem(
+                text = { Text(suggestion, color = TextWhite) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = LocalArtworkAccent.current) },
+                onClick = { onSubmit(suggestion) },
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+        }
+    }
+    state.activePlaylist?.let { playlist ->
+        item(key = "youtube_playlist_title") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = youtube::clearSearch) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver a la búsqueda", tint = LocalArtworkAccent.current)
+                }
+                Text(playlist.title, color = TextWhite, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+    if (state.correctedQuery.isNotBlank()) {
+        item(key = "youtube_corrected_query") {
+            Text("Resultados para «${state.correctedQuery}»", color = TextMuted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+        }
+    }
+    if (playbackError != null || state.searchError != null) {
+        item(key = "youtube_search_error") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+                if (state.searchError != null) {
+                    Text(state.searchError, color = TextMuted)
+                    TextButton(onClick = youtube::retrySearch) { Text("Reintentar búsqueda", color = LocalArtworkAccent.current) }
+                }
+                if (playbackError != null) {
+                    Text(playbackError, color = TextMuted)
+                    TextButton(onClick = onRetryPlayback) { Text("Reintentar reproducción", color = LocalArtworkAccent.current) }
+                }
+            }
+        }
+    }
+    when {
+        state.searching -> item(key = "youtube_searching") {
+            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = LocalArtworkAccent.current)
+            }
+        }
+        state.showingResults && state.results.isEmpty() && state.searchError == null && !state.hasMoreResults ->
+            item(key = "youtube_no_results") {
+                Text(
+                    if (state.activePlaylist != null) "Esta playlist está vacía" else "No se encontraron canciones en YouTube",
+                    color = TextMuted,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                )
+            }
     }
 }
 

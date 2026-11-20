@@ -30,8 +30,8 @@ android {
         applicationId = "com.yang.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.0.12"
+        versionCode = 14
+        versionName = "1.0.13"
         val yinCert = providers.gradleProperty("yinCertSha256").orNull ?: debugCertificateSha256()
         require(yinCert.matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid yinCertSha256" }
         buildConfigField("String", "YIN_CERT_SHA256", "\"${yinCert.lowercase()}\"")

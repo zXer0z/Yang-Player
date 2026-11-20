@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.schabi.newpipe.extractor.Page
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
@@ -27,7 +28,10 @@ data class OnlineShelf(val title: String, val songs: List<Song>, val playlists: 
 data class OnlineState(
     val query: String = "", val suggestions: List<String> = emptyList(), val results: List<Song> = emptyList(),
     val shelves: List<OnlineShelf> = emptyList(), val playlists: List<OnlinePlaylist> = emptyList(),
-    val searching: Boolean = false, val loadingHome: Boolean = false, val error: String? = null,
+    val searching: Boolean = false, val loadingHome: Boolean = false,
+    val homeError: String? = null, val searchError: String? = null, val accountError: String? = null,
+    val activePlaylist: OnlinePlaylist? = null,
+    val loadingMore: Boolean = false, val hasMoreResults: Boolean = false, val moreError: String? = null,
     val correctedQuery: String = "", val resultTitle: String = "", val showingResults: Boolean = false,
     val cacheAvailable: Boolean = false
 )
@@ -51,6 +55,8 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
     private var suggestionJob: Job? = null
     private var accountJob: Job? = null
     private var searchGeneration = 0L
+    private var homeGeneration = 0L
+    private var nextSearchPage: Page? = null
 
     fun rememberSong(song: Song) {
         if (!song.isOnline) return
@@ -72,6 +78,9 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
 
     fun logout() {
         accountJob?.cancel(); homeJob?.cancel(); searchJob?.cancel(); suggestionJob?.cancel()
+        homeGeneration++
+        searchGeneration++
+        nextSearchPage = null
         _accountBusy.value = false
         _account.value = AccountInfo()
         _state.value = OnlineState()
@@ -93,12 +102,12 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
                     AccountInfo(json.getString("name"), json.optString("handle"), json.optString("photo").takeIf { it.startsWith("https://") }, true)
                 }
                 _account.value = result
-                _state.update { it.copy(error = null) }
+                _state.update { it.copy(accountError = null) }
                 loadHome(force = true)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (!YouTubeAuth.isLoggedIn(context)) { _account.value = AccountInfo(); _state.value = OnlineState(error = error.message) }
-                else _state.update { it.copy(error = error.message ?: "No se pudo actualizar el perfil") }
+                if (!YouTubeAuth.isLoggedIn(context)) _account.value = AccountInfo()
+                _state.update { it.copy(accountError = error.message ?: "No se pudo actualizar el perfil") }
             } finally { _accountBusy.value = false }
         }
     }
@@ -106,9 +115,10 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
     fun loadHome(force: Boolean = false) {
         if (homeJob?.isActive == true && !force) return
         homeJob?.cancel()
+        val generation = ++homeGeneration
         val accountScope = OnlineHomeCache.scope(context)
         homeJob = scope.launch {
-            _state.update { it.copy(loadingHome = true) }
+            _state.update { it.copy(loadingHome = true, homeError = null) }
             try {
                 val cached = withContext(Dispatchers.IO) { OnlineHomeCache.read(context, accountScope) }
                 if (accountScope != OnlineHomeCache.scope(context)) return@launch
@@ -128,22 +138,23 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
             catch (error: Exception) {
                 if (_account.value.connected && !YouTubeAuth.isLoggedIn(context)) {
                     _account.value = AccountInfo()
-                    _state.value = OnlineState(error = "Vuelve a conectar tu cuenta de YouTube")
-                } else _state.update { it.copy(error = error.message ?: "No se pudo cargar YouTube") }
+                    _state.update { it.copy(shelves = emptyList(), playlists = emptyList(), cacheAvailable = false,
+                        homeError = "Vuelve a conectar tu cuenta de YouTube") }
+                } else _state.update { it.copy(homeError = error.message ?: "No se pudo cargar YouTube") }
             }
-            finally { _state.update { it.copy(loadingHome = false) } }
+            finally { if (generation == homeGeneration) _state.update { it.copy(loadingHome = false) } }
         }
     }
 
     private fun publishHome(snapshot: OnlineHomeCache.Snapshot) {
         _state.update { it.copy(
             shelves = snapshot.sections.map { shelf -> OnlineShelf(shelf.title, shelf.songs.map(::song), shelf.playlists.map(::playlist)) },
-            playlists = snapshot.playlists.map(::playlist), cacheAvailable = true, error = null
+            playlists = snapshot.playlists.map(::playlist), cacheAvailable = true, homeError = null
         ) }
     }
 
     fun changeQuery(value: String) {
-        _state.update { it.copy(query = value.take(200), error = null) }
+        _state.update { it.copy(query = value.take(200)) }
         suggestionJob?.cancel()
         val query = value.trim().take(200)
         val accountScope = OnlineHomeCache.scope(context)
@@ -169,30 +180,71 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
         if (query.isBlank()) return
         suggestionJob?.cancel(); searchJob?.cancel()
         val generation = ++searchGeneration
+        nextSearchPage = null
         val accountScope = OnlineHomeCache.scope(context)
-        _state.update { it.copy(query = query, suggestions = emptyList(), searching = true, showingResults = true, resultTitle = query, correctedQuery = "", error = null) }
+        _state.update { it.copy(query = query, suggestions = emptyList(), results = emptyList(), searching = true,
+            showingResults = true, resultTitle = query, correctedQuery = "", searchError = null,
+            activePlaylist = null, loadingMore = false, hasMoreResults = false, moreError = null) }
         rememberQuery(accountScope, query)
         searchJob = scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val key = "search:$query"
-                    memo.read(key, 30 * 60_000)?.let { return@withContext it }
                     val page = OnlineAudio.searchPage(query)
-                    JSONObject().put("corrected", page.correctedQuery).put("songs", songsJson(page.songs.map(::song))).also { memo.write(key, it) }
+                    val songs = page.songs.map(::song).distinctBy(Song::id)
+                    memo.write("search:$query", JSONObject().put("corrected", page.correctedQuery).put("songs", songsJson(songs)))
+                    Triple(songs, page.correctedQuery, page.nextPage)
                 }
-                if (accountScope != OnlineHomeCache.scope(context)) return@launch
-                _state.update { it.copy(results = result.getJSONArray("songs").songs(), correctedQuery = result.optString("corrected")) }
+                if (generation != searchGeneration || accountScope != OnlineHomeCache.scope(context)) return@launch
+                nextSearchPage = result.third
+                _state.update { it.copy(results = result.first, correctedQuery = result.second, hasMoreResults = nextSearchPage != null) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { _state.update { it.copy(error = error.message ?: "No se pudo buscar en YouTube") } }
+            catch (error: Exception) {
+                val saved = withContext(Dispatchers.IO) { memo.read("search:$query", 30 * 60_000) }
+                if (generation != searchGeneration || accountScope != OnlineHomeCache.scope(context)) return@launch
+                val cachedSongs = saved?.optJSONArray("songs")?.songs().orEmpty()
+                _state.update {
+                    it.copy(results = cachedSongs, correctedQuery = saved?.optString("corrected").orEmpty(),
+                        searchError = if (cachedSongs.isNotEmpty()) "Mostrando resultados guardados. Reintenta para actualizar." else
+                            error.message ?: "No se pudo buscar en YouTube")
+                }
+            }
             finally { if (generation == searchGeneration) _state.update { it.copy(searching = false) } }
+        }
+    }
+
+    fun searchMore() {
+        val current = _state.value
+        val page = nextSearchPage ?: return
+        if (current.searching || current.loadingMore || !current.hasMoreResults) return
+        val generation = searchGeneration
+        val accountScope = OnlineHomeCache.scope(context)
+        _state.update { it.copy(loadingMore = true, moreError = null) }
+        searchJob = scope.launch {
+            try {
+                val (songs, followingPage) = withContext(Dispatchers.IO) {
+                    val result = OnlineAudio.searchMore(current.resultTitle, page)
+                    result.songs.map(::song) to result.nextPage
+                }
+                if (generation != searchGeneration || accountScope != OnlineHomeCache.scope(context)) return@launch
+                nextSearchPage = followingPage
+                _state.update { it.copy(results = (it.results + songs).distinctBy(Song::id), hasMoreResults = followingPage != null) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (generation == searchGeneration) _state.update { it.copy(moreError = error.message ?: "No se pudieron cargar más resultados") }
+            } finally {
+                if (generation == searchGeneration) _state.update { it.copy(loadingMore = false) }
+            }
         }
     }
 
     fun openPlaylist(value: OnlinePlaylist) {
         searchJob?.cancel(); suggestionJob?.cancel()
         val generation = ++searchGeneration
+        nextSearchPage = null
         val accountScope = OnlineHomeCache.scope(context)
-        _state.update { it.copy(showingResults = true, results = emptyList(), searching = true, suggestions = emptyList(), resultTitle = value.title, correctedQuery = "", error = null) }
+        _state.update { it.copy(showingResults = true, query = "", results = emptyList(), searching = true,
+            suggestions = emptyList(), resultTitle = value.title, correctedQuery = "", searchError = null,
+            activePlaylist = value, loadingMore = false, hasMoreResults = false, moreError = null) }
         searchJob = scope.launch {
             try {
                 val songs = withContext(Dispatchers.IO) {
@@ -202,15 +254,30 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
                             memo.write(key, JSONObject().put("songs", songsJson(it)))
                         }
                 }
-                if (accountScope == OnlineHomeCache.scope(context)) _state.update { it.copy(results = songs) }
+                if (generation == searchGeneration && accountScope == OnlineHomeCache.scope(context)) {
+                    _state.update { it.copy(results = songs) }
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { _state.update { it.copy(error = error.message ?: "No se pudo cargar la lista") } }
+            catch (error: Exception) {
+                if (generation == searchGeneration) _state.update { it.copy(searchError = error.message ?: "No se pudo cargar la lista") }
+            }
             finally { if (generation == searchGeneration) _state.update { it.copy(searching = false) } }
         }
     }
 
-    fun showHome() { searchJob?.cancel(); suggestionJob?.cancel(); _state.update { it.copy(query = "", showingResults = false, suggestions = emptyList(), searching = false, error = null) }; loadHome() }
-    fun dismissSuggestions() { suggestionJob?.cancel(); _state.update { it.copy(suggestions = emptyList()) } }
+    fun clearSearch() {
+        searchGeneration++
+        searchJob?.cancel()
+        suggestionJob?.cancel()
+        nextSearchPage = null
+        _state.update { it.copy(query = "", showingResults = false, suggestions = emptyList(), results = emptyList(),
+            resultTitle = "", correctedQuery = "", searching = false, searchError = null, activePlaylist = null,
+            loadingMore = false, hasMoreResults = false, moreError = null) }
+    }
+    fun retrySearch() {
+        val current = _state.value
+        current.activePlaylist?.let(::openPlaylist) ?: search(current.resultTitle)
+    }
     private fun recentQueries(key: String): List<String> = runCatching { JSONArray(historyPreferences.getString(key, "[]")).strings() }.getOrDefault(emptyList())
     private fun rememberQuery(key: String, value: String) { historyPreferences.edit().putString(key, JSONArray((listOf(value) + recentQueries(key)).distinct().take(20)).toString()).apply() }
     private fun playlist(value: YouTubeMusicClient.PlaylistItem) = OnlinePlaylist(value.id, value.title, value.subtitle, value.thumbnailUrl)

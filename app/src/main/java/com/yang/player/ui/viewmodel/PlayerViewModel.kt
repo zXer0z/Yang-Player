@@ -28,6 +28,7 @@ import com.yang.player.data.UnifiedPlaylist
 import com.yang.player.data.ListeningHistoryStore
 import com.yang.player.model.Album
 import com.yang.player.model.CategoryFilter
+import com.yang.player.model.LibrarySource
 import com.yang.player.model.PlayerState
 import com.yang.player.model.Song
 import com.yang.player.player.MusicPlayerController
@@ -60,6 +61,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if(destination.key.isBlank()) selectTab(NavigationTab.TU)
     }
     fun openPlaylists() = openLibrary(LibraryDestination("playlists"))
+    fun openYouTubeAccount() = openLibrary(LibraryDestination("account"))
     fun openAlbum(album: Album) = openLibrary(LibraryDestination("albums", album.id, album.name))
     fun openFavorites() = openLibrary(LibraryDestination("favorites"))
     fun openArtist(name: String) {
@@ -101,6 +103,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val libraryPreferences = application.getSharedPreferences("library_source", android.content.Context.MODE_PRIVATE)
     private val _cloudMode = MutableStateFlow(libraryPreferences.getBoolean(ServerLibrary.modePreferenceKey, false))
     val cloudMode = _cloudMode.asStateFlow()
+    private val _librarySource = MutableStateFlow(
+        when {
+            libraryPreferences.getBoolean("browse_youtube", false) -> LibrarySource.YOUTUBE
+            _cloudMode.value -> LibrarySource.NAVIDROME
+            else -> LibrarySource.DEVICE
+        }
+    )
+    val librarySource = _librarySource.asStateFlow()
     private val _cloudStatus = MutableStateFlow<String?>(null)
     val cloudStatus = _cloudStatus.asStateFlow()
     private val _cloudLoading = MutableStateFlow(false)
@@ -155,6 +165,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             it.id in profile.favoriteIds || (cloud && it.id in starred)
         }.sortedWith(compareByDescending<Song> { profile.tracks[it.id]?.lastPlayedAt ?: 0L }.thenBy { it.title })
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val youtubeFavoriteSongs: StateFlow<List<Song>> = combine(online.knownTracks, history.profile) { tracks, profile ->
+        tracks.filter { it.id in profile.favoriteIds }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val _suggestedSongs = MutableStateFlow<List<Song>>(emptyList())
     val suggestedSongs = _suggestedSongs.asStateFlow()
     private val _recommendedAlbums = MutableStateFlow<List<Album>>(emptyList())
@@ -354,7 +367,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         refreshHomeRecommendations()
     }
 
+    fun selectLibrarySource(source: LibrarySource) {
+        if (_librarySource.value == source) return
+        if (source == LibrarySource.YOUTUBE) {
+            consumeLibraryDestination()
+            _librarySource.value = source
+            libraryPreferences.edit().putBoolean("browse_youtube", true).apply()
+        } else {
+            setCloudMode(source == LibrarySource.NAVIDROME)
+        }
+    }
+
     fun setCloudMode(enabled: Boolean) {
+        _librarySource.value = if (enabled) LibrarySource.NAVIDROME else LibrarySource.DEVICE
+        libraryPreferences.edit().putBoolean("browse_youtube", false).apply()
         if (_cloudMode.value == enabled) return
         consumeLibraryDestination()
         _cloudMode.value = enabled

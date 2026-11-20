@@ -104,7 +104,7 @@ fun AccountScreen(online: OnlineCoordinator, bottomContentPadding: Dp) {
                 }
             }
         }
-        state.error?.let { error ->
+        state.accountError?.let { error ->
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFFFF9299).copy(alpha = .08f)).padding(16.dp)) {
                 Text(error, color = Color(0xFFFFB6BA), fontSize = 13.sp, lineHeight = 19.sp)
             }

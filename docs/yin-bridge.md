@@ -12,6 +12,11 @@ está en segundo plano. `OPEN` incluye formato PCM, volumen, pausa y token de
 vida; la respuesta incluye ID de sesión y FD. `STATE`, `STATUS`, `EOS` y `CLOSE`
 son comandos de control. La muerte del cliente libera la salida en Yin.
 
+Si ambos APK admiten el puente de botones multimedia, Yin recibe los controles
+que Android dirige al UID del AudioTrack activo. Yin reenvía play, pausa, stop
+y salto de pista mediante el Binder opcional de `OPEN`. Yang comprueba el
+UID y el certificado de Yin y acepta únicamente el Binder de la sesión vigente.
+
 YinAudioSink conserva el transporte/decodificación y MediaSession de Media3,
 pero transmite el PCM directamente a Yin cuando la salida externa está lista.
 No ejecuta el DSP de Yang sobre ese PCM. El reloj usa las muestras reproducidas

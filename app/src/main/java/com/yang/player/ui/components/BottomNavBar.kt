@@ -13,7 +13,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,7 +39,6 @@ enum class NavigationTab(val label: String, val icon: ImageVector) {
     INICIO("Inicio", Icons.Outlined.Home),
     CANCIONES("Canciones", Icons.Default.MusicNote),
     HI_FI("Hi-Fi", Icons.Default.GraphicEq),
-    ONLINE("Online", Icons.Outlined.Language),
     TU("Tú", Icons.Outlined.Person)
 }
 

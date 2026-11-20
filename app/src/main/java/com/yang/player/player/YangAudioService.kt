@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -16,6 +17,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.yang.player.online.OnlinePlayback
 import com.yang.player.audio.AudioEngineStore
+import com.yang.player.audio.YinConnector
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.common.Format
@@ -63,6 +65,15 @@ class YangAudioService : MediaSessionService() {
             .build()
 
         player = exoPlayer
+        YinConnector.get(this).setMediaButtonHandler { key ->
+            when (key) {
+                KeyEvent.KEYCODE_MEDIA_PLAY -> exoPlayer.play()
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> exoPlayer.pause()
+                KeyEvent.KEYCODE_MEDIA_STOP -> exoPlayer.stop()
+                KeyEvent.KEYCODE_MEDIA_NEXT -> exoPlayer.seekToNextMediaItem()
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> exoPlayer.seekToPreviousMediaItem()
+            }
+        }
         checkpoint = PlaybackSessionStore(this)
         checkpoint.load()?.let { saved ->
             exoPlayer.setMediaItems(saved.songs.map(PlaybackSessionStore::item), saved.index, saved.positionMs)
@@ -129,6 +140,7 @@ class YangAudioService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        YinConnector.get(this).setMediaButtonHandler(null)
         checkpointHandler.removeCallbacks(savePosition)
         listeningTracker?.close(); listeningTracker = null
         player?.let { SleepTimerStore.detach(it); checkpoint.saveQueue(it) }
@@ -167,4 +179,3 @@ class YangAudioService : MediaSessionService() {
         }
     }
 }
-

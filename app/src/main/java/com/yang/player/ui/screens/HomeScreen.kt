@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -28,11 +29,17 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +47,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +65,9 @@ import com.yang.player.data.rememberArtistPhoto
 import com.yang.player.model.Album
 import com.yang.player.model.CategoryFilter
 import com.yang.player.model.Song
+import com.yang.player.online.OnlineCoordinator
+import com.yang.player.online.OnlinePlaylist
+import com.yang.player.online.OnlineState
 import com.yang.player.ui.components.AlbumCard
 import com.yang.player.ui.components.CategoryChipsRow
 import com.yang.player.ui.components.HeroContinueListeningCarousel
@@ -66,6 +79,7 @@ import com.yang.player.ui.theme.TextMuted
 import com.yang.player.ui.theme.TextWhite
 import java.time.LocalTime
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     userName: String = "Usuario",
@@ -91,7 +105,15 @@ fun HomeScreen(
     onFeaturedSongSelected: (Song, List<Song>) -> Unit = onSongSelected,
     onPlaylists: () -> Unit = {},
     isCloudMode: Boolean = false,
+    sourceSelector: @Composable () -> Unit = {},
+    youtube: OnlineCoordinator? = null,
+    onConnectYouTube: () -> Unit = {},
+    onOpenYouTubePlaylist: (OnlinePlaylist) -> Unit = {},
 ) {
+    val youtubeState = youtube?.state?.collectAsState()?.value
+    val youtubeConnected = youtube?.account?.collectAsState()?.value?.connected == true
+    val pullRefreshState = rememberPullToRefreshState()
+    LaunchedEffect(youtube) { youtube?.loadHome() }
     val middleQueue = favoriteSongs.ifEmpty { suggestedSongs }
     val displayedFavorites = remember(middleQueue) { middleQueue.take(4) }
     val homeAlbums = recommendedAlbums.ifEmpty { albums.take(10) }
@@ -101,10 +123,7 @@ fun HomeScreen(
         else -> "Buenas noches,"
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 12.dp, bottom = bottomContentPadding)
-    ) {
+    val feed: LazyListScope.() -> Unit = feed@{
         // 1. Header with greeting and profile avatar
         item {
             HomeHeader(
@@ -113,6 +132,20 @@ fun HomeScreen(
                 profileImageUrl = profileImageUrl,
                 onProfileClick = onProfileClick
             )
+        }
+        item(key = "library_source") { sourceSelector() }
+
+        if (youtube != null && youtubeState != null) {
+            youtubeHomeItems(
+                state = youtubeState,
+                connected = youtubeConnected,
+                currentSongId = currentPlayingSongId,
+                isPlaying = isPlaying,
+                onPlay = onSongSelected,
+                onConnect = onConnectYouTube,
+                onPlaylistClick = onOpenYouTubePlaylist
+            )
+            return@feed
         }
 
         // 2. Filter chips ("Todo", "Álbumes", "Artistas", "Listas")
@@ -372,6 +405,112 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+    val refreshing = youtubeState?.loadingHome == true
+    val refreshModifier = if (youtube != null) {
+        val refresh = { youtube.loadHome(force = true) }
+        Modifier.pullToRefresh(isRefreshing = refreshing, state = pullRefreshState, onRefresh = refresh)
+            .semantics {
+                if (!refreshing) {
+                    customActions = listOf(CustomAccessibilityAction("Actualizar Inicio de YouTube") {
+                        refresh()
+                        true
+                    })
+                }
+            }
+    } else Modifier
+    Box(Modifier.fillMaxSize().then(refreshModifier)) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 12.dp, bottom = bottomContentPadding),
+            content = feed
+        )
+        if (youtube != null) {
+            PullToRefreshDefaults.Indicator(
+                state = pullRefreshState,
+                isRefreshing = refreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+                containerColor = SurfaceCard,
+                color = LocalArtworkAccent.current
+            )
+        }
+    }
+}
+
+private fun LazyListScope.youtubeHomeItems(
+    state: OnlineState,
+    connected: Boolean,
+    currentSongId: String?,
+    isPlaying: Boolean,
+    onPlay: (Song, List<Song>) -> Unit,
+    onConnect: () -> Unit,
+    onPlaylistClick: (OnlinePlaylist) -> Unit
+) {
+    if (!connected) {
+        item(key = "youtube_account") {
+            TextButton(onClick = onConnect, modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text("Conectar cuenta para ver tus listas", color = LocalArtworkAccent.current)
+            }
+        }
+    }
+    state.homeError?.let { error ->
+        item(key = "youtube_error") {
+            Text(error, color = TextMuted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+        }
+    }
+    if (state.cacheAvailable && state.shelves.isEmpty() && state.playlists.isEmpty() && state.homeError == null) {
+        item(key = "youtube_empty") {
+            Text("YouTube todavía no tiene recomendaciones para mostrar.", color = TextMuted,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+        }
+    }
+    if (state.playlists.isNotEmpty()) {
+        item(key = "youtube_saved_playlists") {
+            Spacer(Modifier.height(16.dp))
+            SectionHeader(title = "Tus playlists de YouTube")
+            YouTubePlaylistRow(state.playlists, onPlaylistClick)
+        }
+    }
+    state.shelves.forEachIndexed { index, shelf ->
+        if (shelf.songs.isNotEmpty() || shelf.playlists.isNotEmpty()) {
+            item(key = "youtube_shelf_$index") {
+                Spacer(Modifier.height(20.dp))
+                SectionHeader(title = shelf.title)
+                if (shelf.songs.isNotEmpty()) {
+                    val queue = remember(shelf.songs) { shelf.songs.distinctBy(Song::id) }
+                    HeroContinueListeningCarousel(
+                        featuredSongs = queue,
+                        currentPlayingSongId = currentSongId,
+                        isPlaying = isPlaying,
+                        onSongClick = { onPlay(it, queue) },
+                        onPlayToggle = { onPlay(it, queue) }
+                    )
+                }
+                if (shelf.playlists.isNotEmpty()) YouTubePlaylistRow(shelf.playlists, onPlaylistClick)
+            }
+        }
+    }
+}
+
+@Composable
+private fun YouTubePlaylistRow(playlists: List<OnlinePlaylist>, onClick: (OnlinePlaylist) -> Unit) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        items(playlists.distinctBy(OnlinePlaylist::id), key = { it.id }) { playlist ->
+            Column(Modifier.width(155.dp).clickable { onClick(playlist) }) {
+                AsyncImage(
+                    playlist.image, null,
+                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(16.dp)).background(SurfaceCard),
+                    contentScale = ContentScale.Crop
+                )
+                Text(playlist.title, color = TextWhite, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+                if (playlist.subtitle.isNotBlank()) Text(playlist.subtitle, color = TextMuted, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
