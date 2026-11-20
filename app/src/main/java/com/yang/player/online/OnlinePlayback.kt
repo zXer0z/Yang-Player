@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit
 @UnstableApi
 object OnlinePlayback {
     @Volatile private var cache: SimpleCache? = null
+    @Volatile private var videoCache: SimpleCache? = null
     private val warming = ThreadPoolExecutor(1, 1, 15, TimeUnit.SECONDS, ArrayBlockingQueue(1), ThreadPoolExecutor.DiscardOldestPolicy())
     private fun cache(context: Context): SimpleCache = cache ?: synchronized(this) {
         cache ?: SimpleCache(context.applicationContext.cacheDir.resolve("online_audio_v1"),
@@ -39,6 +40,21 @@ object OnlinePlayback {
         }
         return CacheDataSource.Factory().setCache(cache(context)).setUpstreamDataSourceFactory(resolving)
             .setCacheKeyFactory { spec -> if (OnlineAudio.isOnline(spec.uri)) "yt:${spec.uri.lastPathSegment}" else spec.key ?: spec.uri.toString() }
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    }
+
+    fun videoFactory(context: Context): DataSource.Factory {
+        val app = context.applicationContext
+        val storage = videoCache ?: synchronized(this) {
+            videoCache ?: SimpleCache(
+                app.cacheDir.resolve("online_video_v1"),
+                LeastRecentlyUsedCacheEvictor(160L * 1024 * 1024),
+                StandaloneDatabaseProvider(app)
+            ).also { videoCache = it }
+        }
+        val http = DefaultHttpDataSource.Factory().setUserAgent(OnlineAudio.UA)
+            .setConnectTimeoutMs(12_000).setReadTimeoutMs(20_000)
+        return CacheDataSource.Factory().setCache(storage).setUpstreamDataSourceFactory(http)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 

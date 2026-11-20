@@ -25,6 +25,11 @@ import java.util.Locale
 data class AccountInfo(val name: String = "Usuario", val handle: String = "", val avatar: String? = null, val connected: Boolean = false)
 data class OnlinePlaylist(val id: String, val title: String, val subtitle: String, val image: String?)
 data class OnlineShelf(val title: String, val songs: List<Song>, val playlists: List<OnlinePlaylist>)
+internal enum class YouTubeDiscovery(val label: String, val query: String) {
+    VIDEOS("Videos", "videos populares entretenimiento Perú"),
+    MUSIC("Música", "videoclips oficiales música latina"),
+    OTHER("Otros", "documentales cortos ciencia curiosidades en español")
+}
 data class OnlineState(
     val query: String = "", val suggestions: List<String> = emptyList(), val results: List<Song> = emptyList(),
     val shelves: List<OnlineShelf> = emptyList(), val playlists: List<OnlinePlaylist> = emptyList(),
@@ -63,6 +68,23 @@ class OnlineCoordinator(context: Context, private val scope: CoroutineScope) {
         val songs = (listOf(song) + _knownTracks.value).distinctBy { it.id }.take(300)
         _knownTracks.value = songs
         historyPreferences.edit().putString("saved_tracks", songsJson(songs).toString()).apply()
+    }
+
+    suspend fun relatedVideos(seed: Song): List<Song> = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(seed.mediaUri)
+        val track = OnlineTrack(uri, seed.title, seed.artist, seed.album, OnlineAudio.id(uri), seed.durationMs)
+        OnlineAudio.related(track).map(::song).filter { it.mediaUri != seed.mediaUri }.distinctBy { it.id }
+    }
+
+    internal suspend fun discover(category: YouTubeDiscovery, refresh: Boolean): List<Song> = withContext(Dispatchers.IO) {
+        val key = "discovery:${category.name}"
+        if (!refresh) {
+            val cached = memo.read(key, 30 * 60 * 1000L)?.optJSONArray("songs")?.songs().orEmpty()
+            if (cached.isNotEmpty()) return@withContext cached
+        }
+        val tracks = OnlineAudio.search(category.query).map(::song).distinctBy { it.id }.take(24)
+        if (tracks.isNotEmpty()) memo.write(key, JSONObject().put("songs", songsJson(tracks)))
+        tracks
     }
 
     init { if (YouTubeAuth.hasSavedSession(context)) refreshAccount() }

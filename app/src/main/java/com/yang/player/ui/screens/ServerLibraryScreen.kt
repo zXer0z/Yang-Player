@@ -43,7 +43,7 @@ internal fun ServerLibraryScreen(viewModel: PlayerViewModel, bottomPadding: Dp, 
     val cloudMode by viewModel.cloudMode.collectAsState()
     val cloudLoading by viewModel.cloudLoading.collectAsState()
     var profile by remember { mutableStateOf(ServerLibrary.saved(app)) }
-    var address by remember { mutableStateOf(profile?.base ?: ServerLibrary.DEFAULT_URL) }
+    var address by remember { mutableStateOf(profile?.base.orEmpty()) }
     var user by remember { mutableStateOf(profile?.user.orEmpty()) }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }

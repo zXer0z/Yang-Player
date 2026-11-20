@@ -20,7 +20,7 @@ final class OnlineAudio {
     private static final Map<String,InfoEntry> infoCache=new ConcurrentHashMap<>();
     private static final ExecutorService preparation=new ThreadPoolExecutor(1,1,15,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(1),new ThreadPoolExecutor.DiscardOldestPolicy());
     private static final class InfoEntry {final long created=android.os.SystemClock.elapsedRealtime();final FutureTask<StreamInfo> task;InfoEntry(Uri uri){task=new FutureTask<>(()->StreamInfo.getInfo(NewPipe.getService(0),watch(uri)));}}
-    private static StreamInfo info(Uri uri)throws Exception{
+    static StreamInfo info(Uri uri)throws Exception{
         init();String key=id(uri);InfoEntry entry=infoCache.get(key);if(entry!=null&&android.os.SystemClock.elapsedRealtime()-entry.created>5*60*1000){infoCache.remove(key,entry);entry=null;}
         if(entry==null){InfoEntry candidate=new InfoEntry(uri);InfoEntry old=infoCache.putIfAbsent(key,candidate);entry=old==null?candidate:old;if(infoCache.size()>40)for(String other:infoCache.keySet())if(!other.equals(key)){infoCache.remove(other);break;}}
         entry.task.run();try{return entry.task.get();}catch(Exception error){infoCache.remove(key,entry);throw error;}
@@ -33,6 +33,7 @@ final class OnlineAudio {
     static synchronized void init()throws IOException{if(!initialized){NewPipe.init(new HttpDownloader());initialized=true;}}
     static String id(Uri uri)throws IOException{String id=uri.getLastPathSegment();if(!isOnline(uri)||id==null||!id.matches("[A-Za-z0-9_-]{11}"))throw new IOException("Enlace de YouTube no válido.");return id;}
     static void invalidate(Uri uri)throws IOException{String key=id(uri);streams.remove(key);infoCache.remove(key);}
+    static void invalidateInfo(Uri uri)throws IOException{infoCache.remove(id(uri));}
     static String watch(Uri uri)throws IOException{return "https://www.youtube.com/watch?v="+id(uri);}
     static final class Resolved {final OnlineBuffer buffer=new OnlineBuffer();final String url;final long duration,created=android.os.SystemClock.elapsedRealtime();Resolved(String url,long duration){this.url=url;this.duration=duration;}}
     static Resolved resolve(Uri uri)throws IOException{

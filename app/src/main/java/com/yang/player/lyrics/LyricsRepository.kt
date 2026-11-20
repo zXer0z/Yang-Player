@@ -27,6 +27,14 @@ import kotlin.coroutines.resumeWithException
 class LyricsRepository(context: Context) {
     private val context = context.applicationContext
     private val preferences = context.getSharedPreferences("lyrics_files", Context.MODE_PRIVATE)
+    private val languagePreferences = context.getSharedPreferences("lyrics_languages", Context.MODE_PRIVATE)
+
+    fun preferredLanguage(song: Song): LyricsLanguage? =
+        languagePreferences.getString(song.id, null)?.let { saved -> LyricsLanguage.entries.firstOrNull { it.name == saved } }
+
+    fun setPreferredLanguage(song: Song, language: LyricsLanguage) {
+        languagePreferences.edit().putString(song.id, language.name).apply()
+    }
 
     suspend fun load(song: Song): LyricsDocument? {
         val key = "${song.id}:${song.mediaUri}"
@@ -49,18 +57,20 @@ class LyricsRepository(context: Context) {
             }
         }
         // An explicitly selected file takes precedence over embedded tags.
-        if (preferences.contains(song.id) && candidates.isNotEmpty()) return candidates.maxBy(::quality).also {
+        if (preferences.contains(song.id) && candidates.isNotEmpty()) return selectLyrics(candidates)?.also {
             synchronized(cache) { cache.put(key, it) }
         }
         if (song.mediaUri.startsWith(com.yang.player.data.ServerLibrary.SCHEME)) {
             val remote = withContext(Dispatchers.IO) {
                 safely {
                     com.yang.player.data.ServerLibrary.lyrics(context, song.mediaUri, song.artist, song.title)
-                        ?.let { LyricsParser.parse(it, song.durationMs) }
+                        .mapNotNull { source ->
+                            safely { LyricsParser.parse(source.value, song.durationMs, LyricsLanguage.fromTag(source.language)) }
+                        }
                 }
             }
-            if (remote != null) candidates.add(remote)
-            return candidates.maxByOrNull(::quality)?.also { synchronized(cache) { cache.put(key, it) } }
+            candidates.addAll(remote.orEmpty())
+            return selectLyrics(candidates)?.also { synchronized(cache) { cache.put(key, it) } }
         }
         if (song.isOnline) return candidates.maxByOrNull(::quality)
         try {
@@ -97,7 +107,7 @@ class LyricsRepository(context: Context) {
             // A song change must cancel extraction instead of attaching stale lyrics.
             if (cancelled !is kotlinx.coroutines.TimeoutCancellationException) throw cancelled
         } catch (_: Exception) { /* Available sidecars can still be used. */ }
-        return candidates.maxByOrNull(::quality)?.also { synchronized(cache) { cache.put(key, it) } }
+        return selectLyrics(candidates)?.also { synchronized(cache) { cache.put(key, it) } }
     }
 
     suspend fun importFile(song: Song, uri: Uri): LyricsDocument = withContext(Dispatchers.IO) {
@@ -161,6 +171,14 @@ class LyricsRepository(context: Context) {
     }
 
     private fun isLyricsKey(key: String) = key.uppercase().let { it.contains("LYRIC") || it in setOf("USLT", "SYLT", "TTML", "LRC", "©LYR") }
+    private fun selectLyrics(candidates: List<LyricsDocument>): LyricsDocument? {
+        val primary = candidates.maxByOrNull(::quality) ?: return null
+        if (primary.language == null || primary.translation != null) return primary
+        val alternate = candidates
+            .filter { it.language != null && it.language != primary.language }
+            .maxByOrNull(::quality)
+        return if (alternate == null) primary else primary.copy(translation = alternate.copy(translation = null))
+    }
     private fun quality(document: LyricsDocument) = when { document.enhanced -> 3; document.synchronized -> 2; else -> 1 }
     private inline fun <T> safely(block: () -> T): T? = try { block() } catch (_: Exception) { null }
 

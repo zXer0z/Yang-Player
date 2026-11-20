@@ -118,6 +118,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
 import com.yang.player.model.Song
+import com.yang.player.ui.components.YouTubeVideoPlayer
+import com.yang.player.ui.components.YouTubeVideoState
 import com.yang.player.ui.components.SongOptionsMenuModal
 import com.yang.player.ui.theme.SurfaceCard
 import com.yang.player.ui.theme.ArtworkPalette
@@ -141,7 +143,7 @@ import kotlin.math.absoluteValue
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FullPlayerModal(
+internal fun FullPlayerModal(
     song: Song?,
     queue: List<Song> = emptyList(),
     currentIndex: Int = -1,
@@ -153,6 +155,10 @@ fun FullPlayerModal(
     playbackProgress: StateFlow<Float>? = null,
     playbackPositionMs: StateFlow<Long>? = null,
     durationMs: Long,
+    video: YouTubeVideoState? = null,
+    loadRelatedVideos: suspend (Song) -> List<Song> = { emptyList() },
+    onPlaySuggestedVideo: (Song) -> Unit = {},
+    onYouTubeDownload: (Song) -> Unit = {},
     isFavorite: Boolean = false,
     isShuffle: Boolean = false,
     repeatMode: Int = 0,
@@ -191,10 +197,34 @@ fun FullPlayerModal(
     val themeAccent = LocalArtworkAccent.current
     val beatActive = yinConnected || (appearanceConfig.beatReactiveAtmosphere && themeMode == ThemeMode.DYNAMIC)
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle, beatActive, isPlaying, showLyrics, showQueue) {
-        if (beatActive && isPlaying && !showLyrics && !showQueue) {
+    val videoVisible = video != null
+    LaunchedEffect(lifecycle, beatActive, isPlaying, showLyrics, showQueue, videoVisible) {
+        if (beatActive && isPlaying && !showLyrics && !showQueue && !videoVisible) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { MusicSpectrum.observe() }
         }
+    }
+    if (video != null) {
+        YouTubeVideoPlayer(
+            state = video,
+            song = song,
+            queue = queue,
+            nextSong = nextSong,
+            playing = isPlaying,
+            position = playbackPositionMs,
+            initialPositionMs = currentPositionMs,
+            durationMs = durationMs,
+            palette = palette,
+            themeMode = themeMode,
+            onDismiss = onDismiss,
+            loadRelated = loadRelatedVideos,
+            onPlaySuggested = onPlaySuggestedVideo,
+            onDownload = { onYouTubeDownload(song) },
+            onPlayPause = onPlayPause,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onSeek = onSeek
+        )
+        return
     }
 
     // Prepare stable queue and index for the pager
@@ -685,6 +715,7 @@ fun FullPlayerModal(
     if (showOptionsMenu) {
         SongOptionsMenuModal(
             song = song,
+            onDownload = if (song.isOnline) ({ onYouTubeDownload(song) }) else null,
             isFavorite = isFavorite,
             onDismiss = { showOptionsMenu = false },
             onPlayNext = onPlayNext,

@@ -9,9 +9,11 @@ import javax.xml.parsers.DocumentBuilderFactory
 object LyricsParser {
     private val lineTime = Regex("\\[(\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?)\\]")
     private val wordTime = Regex("<(\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?)>")
-    private val metadata = Regex("^\\[(?:ar|al|ti|by|re|ve|length|offset):.*]$", RegexOption.IGNORE_CASE)
+    private val metadata = Regex("^\\[(?:ar|al|ti|by|re|ve|length|offset|la|lang):.*]$", RegexOption.IGNORE_CASE)
+    private val languageTag = Regex("(?im)^\\[(?:la|lang):([^\\r\\n]+)\\]\\s*$")
+    private val voiceTag = Regex("^v\\d+:\\s*", RegexOption.IGNORE_CASE)
 
-    fun parse(input: String, durationMs: Long = 0): LyricsDocument? {
+    fun parse(input: String, durationMs: Long = 0, language: LyricsLanguage? = null): LyricsDocument? {
         val text = input.trim().removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
         if (text.isBlank()) return null
         val lines = when {
@@ -20,7 +22,8 @@ object LyricsParser {
             text.contains("-->") -> parseSrt(text)
             else -> text.lines().filter { it.isNotBlank() && !metadata.matches(it.trim()) }.map { LyricLine(it.trim()) }
         }
-        return normalize(lines, durationMs)
+        val indicatedLanguage = language ?: LyricsLanguage.fromTag(languageTag.find(text)?.groupValues?.get(1))
+        return normalize(lines, durationMs, indicatedLanguage)
     }
 
     private fun lrcTime(value: String): Long? {
@@ -139,13 +142,13 @@ object LyricsParser {
         }
     }
 
-    private fun normalize(input: List<LyricLine>, durationMs: Long): LyricsDocument? {
+    private fun normalize(input: List<LyricLine>, durationMs: Long, language: LyricsLanguage? = null): LyricsDocument? {
         if (input.isEmpty()) return null
         val sorted = if (input.any { it.startMs != null }) input.sortedBy { it.startMs ?: 0 } else input
         val lines = sorted.mapIndexedNotNull { index, line ->
             val firstText = line.text.indexOfFirst { !it.isWhitespace() }
             if (firstText < 0) return@mapIndexedNotNull null
-            val voicePrefix = Regex("^v\\d+:\\s*", RegexOption.IGNORE_CASE).find(line.text.substring(firstText))?.value?.length ?: 0
+            val voicePrefix = voiceTag.find(line.text.substring(firstText))?.value?.length ?: 0
             val leading = firstText + voicePrefix
             val clean = line.text.substring(leading).trimEnd()
             if (clean.isBlank()) return@mapIndexedNotNull null
@@ -162,7 +165,31 @@ object LyricsParser {
             }
             line.copy(text = clean, endMs = end, segments = segments)
         }
-        return lines.takeIf { it.isNotEmpty() }?.let(::LyricsDocument)
+        if (lines.isEmpty()) return null
+        // Voice-marked lines can be simultaneous sung parts, even in different languages.
+        if (input.none { voiceTag.containsMatchIn(it.text.trimStart()) }) {
+            parallelTranslation(lines)?.let { return it }
+        }
+        return LyricsDocument(lines, language ?: LyricsLanguage.detect(lines))
+    }
+
+    private fun parallelTranslation(lines: List<LyricLine>): LyricsDocument? {
+        if (lines.any { it.startMs == null }) return null
+        val cues = lines.groupBy(LyricLine::startMs).values
+        if (cues.any { it.size > 2 }) return null
+        val pairs = cues.filter { it.size == 2 }
+        if (pairs.size < 3 || pairs.size * 4 < cues.size * 3) return null
+        val firstLanguage = LyricsLanguage.detect(pairs.map { it.first() }) ?: return null
+        val secondLines = pairs.map { it.last() }
+        val secondLanguage = LyricsLanguage.detect(secondLines) ?: return null
+        if (firstLanguage == secondLanguage) return null
+
+        // The two versions share cue times. The first line in each pair is the source lyric.
+        return LyricsDocument(
+            lines = cues.map { it.first() },
+            language = firstLanguage,
+            translation = LyricsDocument(secondLines, secondLanguage, showInstrumentalBreaks = pairs.size == cues.size)
+        )
     }
 
     fun parseId3Lyrics(data: ByteArray, synchronized: Boolean, durationMs: Long): LyricsDocument? {
@@ -191,7 +218,8 @@ object LyricsParser {
         decode(at, descriptionEnd) // Captures UTF-16 byte order for subsequent strings.
         at = descriptionEnd + step
         if (at >= data.size) return null
-        if (!synchronized) return parse(decode(at, data.size), durationMs)
+        val language = LyricsLanguage.fromTag(String(data, 1, 3, Charsets.US_ASCII))
+        if (!synchronized) return parse(decode(at, data.size), durationMs, language)
         if (data[4].toInt() != 2) return null // MPEG-frame timestamps need a frame index, not a guessed conversion.
         val chunks = mutableListOf<Pair<Long, String>>()
         while (at < data.size) {
@@ -226,6 +254,6 @@ object LyricsParser {
             }
         }
         flush()
-        return normalize(lines, durationMs)
+        return normalize(lines, durationMs, language)
     }
 }

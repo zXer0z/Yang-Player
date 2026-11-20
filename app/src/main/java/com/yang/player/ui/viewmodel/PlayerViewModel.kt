@@ -33,6 +33,7 @@ import com.yang.player.model.PlayerState
 import com.yang.player.model.Song
 import com.yang.player.player.MusicPlayerController
 import com.yang.player.online.OnlineCoordinator
+import com.yang.player.online.YouTubeDownloads
 import com.yang.player.ui.components.NavigationTab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +46,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -53,6 +55,11 @@ data class LibraryDestination(val page: String, val key: String = "", val title:
 
 @UnstableApi
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
+    private val _youtubeDownloadSong = MutableStateFlow<Song?>(null)
+    val youtubeDownloadSong = _youtubeDownloadSong.asStateFlow()
+    fun openYouTubeDownload(song: Song) { if (song.isOnline) _youtubeDownloadSong.value = song }
+    fun closeYouTubeDownload() { _youtubeDownloadSong.value = null }
+
     private val _libraryDestination = MutableStateFlow<LibraryDestination?>(null)
     val libraryDestination = _libraryDestination.asStateFlow()
     fun consumeLibraryDestination() { _libraryDestination.value = null }
@@ -71,9 +78,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun openAlbumByName(name: String) { albums.value.firstOrNull { it.name == name }?.let(::openAlbum) }
 
     private val playerController = MusicPlayerController(application)
+    private val videoPrefs = application.getSharedPreferences("youtube_video", Application.MODE_PRIVATE)
+    private val _youtubeVideoEnabled = MutableStateFlow(videoPrefs.getBoolean("enabled", false))
+    val youtubeVideoEnabled = _youtubeVideoEnabled.asStateFlow()
+
+    fun setYouTubeVideoEnabled(enabled: Boolean) {
+        videoPrefs.edit().putBoolean("enabled", enabled).apply()
+        _youtubeVideoEnabled.value = enabled
+    }
+
+    fun videoClock(songId: String) = playerController.videoClock(songId)
+    fun holdAudioForVideo(songId: String) = playerController.holdAudioForVideo(songId)
+
     private val completion = com.yang.player.data.OnlineMetadata.get(application)
     private val audioScanner = AudioScanner(application)
     private val documentLibrary = DocumentAudioLibrary(application)
+    private val youtubeDownloads = YouTubeDownloads.get(application)
     private val _isScanning = MutableStateFlow(false)
     val isScanning = _isScanning.asStateFlow()
     private val _libraryMessage = MutableStateFlow<String?>(null)
@@ -101,7 +121,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val featuredSongs: StateFlow<List<Song>> = _featuredSongs.asStateFlow()
 
     private val libraryPreferences = application.getSharedPreferences("library_source", android.content.Context.MODE_PRIVATE)
-    private val _cloudMode = MutableStateFlow(libraryPreferences.getBoolean(ServerLibrary.modePreferenceKey, false))
+    private val _cloudMode = MutableStateFlow(
+        libraryPreferences.getBoolean(ServerLibrary.modePreferenceKey,
+            libraryPreferences.getBoolean("public_server", libraryPreferences.getBoolean("cloud", false))) &&
+            ServerLibrary.saved(application) != null
+    )
     val cloudMode = _cloudMode.asStateFlow()
     private val _librarySource = MutableStateFlow(
         when {
@@ -245,6 +269,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         if (_cloudMode.value) reloadCloudLibrary() else scanLocalDeviceAudio()
+        viewModelScope.launch {
+            youtubeDownloads.audioDocuments.drop(1).collect {
+                scanJob?.join()
+                scanLocalDeviceAudio()
+            }
+        }
         playerController.onQueueEnded = {
             handleQueueEnded()
         }
@@ -310,6 +340,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun playOnlineSong(song: Song, queue: List<Song>) {
         if (playerState.value.currentSong?.id == song.id) togglePlayPause() else playSong(song, queue)
+    }
+
+    fun playSuggestedVideo(song: Song) {
+        val state = playerState.value
+        if (state.currentSong?.id == song.id) return
+        online.rememberSong(song)
+        val index = state.queue.indexOfFirst { it.id == song.id }
+        if (index >= 0) {
+            playerController.selectQueueItem(index)
+        } else {
+            val insertIndex = (state.currentIndex + 1).coerceIn(0, state.queue.size)
+            playerController.playNext(song)
+            playerController.selectQueueItem(insertIndex)
+        }
     }
 
     fun retryPlayback() {
@@ -379,6 +423,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setCloudMode(enabled: Boolean) {
+        if (_selectedTab.value == NavigationTab.DESCARGADAS) selectTab(NavigationTab.CANCIONES)
         _librarySource.value = if (enabled) LibrarySource.NAVIDROME else LibrarySource.DEVICE
         libraryPreferences.edit().putBoolean("browse_youtube", false).apply()
         if (_cloudMode.value == enabled) return
@@ -645,7 +690,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             try {
             val indexed = audioScanner.scanLocalAudio()
             val (documents, unreadable) = documentLibrary.scan(indexed)
-            val localSongs = (indexed + documents).distinctBy { it.mediaUri }.map(completion::apply).sortedBy { it.title.lowercase() }
+            val downloads = youtubeDownloads.downloadedSongs()
+            val downloadPaths = downloads.map { it.dataPath }.filter(String::isNotBlank).toSet()
+            val localSongs = (downloads + indexed.filterNot { it.dataPath in downloadPaths } + documents)
+                .distinctBy { it.id }.distinctBy { it.mediaUri }.map(completion::apply).sortedBy { it.title.lowercase() }
             withContext(Dispatchers.Main) {
                 localCatalog = localSongs
                 if (!_cloudMode.value) {

@@ -56,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import coil.compose.AsyncImage
 import com.yang.player.data.CloudPlaylistSummary
 import com.yang.player.data.CloudStreamQuality
+import com.yang.player.online.YouTubeDiscovery
+import kotlinx.coroutines.CancellationException
 import com.yang.player.ui.theme.BackgroundDark
 import com.yang.player.ui.components.PlaylistPickerSheet
 import androidx.compose.ui.platform.LocalContext
@@ -148,9 +150,12 @@ fun SongsLibraryScreen(
     onViewArtist: (String) -> Unit = {},
     requestSearchFocus: Boolean = false,
     onSearchFocusHandled: () -> Unit = {},
+    revealSongId: String? = null,
+    onRevealSongHandled: () -> Unit = {},
     onAudioSettings: () -> Unit = {},
     cloudDownloadName: (Song) -> String? = { null },
     onCloudDownload: (Song, android.net.Uri?) -> Unit = { _, _ -> },
+    onYouTubeDownload: (Song) -> Unit = {},
     isCloudMode: Boolean = false,
     isCloudRefreshing: Boolean = false,
     onCloudRefresh: () -> Unit = {},
@@ -168,6 +173,27 @@ fun SongsLibraryScreen(
 ) {
     val youtubeState = youtube?.state?.collectAsState()?.value
     val isYouTube = youtube != null
+    val showDiscovery = youtubeState != null && youtubeState.query.isBlank() &&
+        !youtubeState.showingResults && youtubeState.activePlaylist == null
+    var discoveryCategory by rememberSaveable { mutableStateOf(YouTubeDiscovery.VIDEOS) }
+    var discoveredSongs by remember(youtube, discoveryCategory) { mutableStateOf(emptyList<Song>()) }
+    var discoveryLoading by remember(youtube, discoveryCategory) { mutableStateOf(true) }
+    var discoveryFailed by remember(youtube, discoveryCategory) { mutableStateOf(false) }
+    var discoveryAttempt by remember(youtube, discoveryCategory) { mutableStateOf(0) }
+    LaunchedEffect(youtube, showDiscovery, discoveryCategory, discoveryAttempt) {
+        if (!showDiscovery || youtube == null) return@LaunchedEffect
+        discoveryLoading = true
+        discoveryFailed = false
+        try {
+            discoveredSongs = youtube.discover(discoveryCategory, refresh = discoveryAttempt > 0)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            discoveryFailed = true
+        } finally {
+            discoveryLoading = false
+        }
+    }
     val searchFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -241,7 +267,9 @@ fun SongsLibraryScreen(
     val hasCustomOrder = effectiveSortKey != "title" || descending
 
     val favoriteIds = remember(favoriteSongs) { favoriteSongs.map { it.id }.toSet() }
-    val filteredSongs = if (youtubeState != null) youtubeState.results else remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded, downloadedCloudIds, effectiveSortKey, descending) {
+    val filteredSongs = if (youtubeState != null) {
+        if (showDiscovery) discoveredSongs else youtubeState.results
+    } else remember(songs, searchQuery, favoriteIds, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded, downloadedCloudIds, effectiveSortKey, descending) {
         val hasQuery = searchQuery.isNotBlank()
         val query = searchQuery.trim()
         val matching = if (!onlyFavorites && !onlyHiRes && !effectiveOnlyDownloaded && !hasQuery) {
@@ -280,12 +308,36 @@ fun SongsLibraryScreen(
     }
     if (isYouTube) {
         LaunchedEffect(youtubeState?.searching, youtubeState?.showingResults, youtubeState?.resultTitle) {
-            if (youtubeState?.searching == true || youtubeState?.showingResults == false) listState.scrollToItem(0)
+            if (revealSongId == null && (youtubeState?.searching == true || youtubeState?.showingResults == false)) {
+                listState.scrollToItem(0)
+            }
         }
     } else {
         LaunchedEffect(searchQuery, effectiveSortKey, descending, onlyFavorites, onlyHiRes, effectiveOnlyDownloaded) {
-            listState.scrollToItem(0)
+            if (revealSongId == null) listState.scrollToItem(0)
         }
+    }
+    val headerRows = if (youtubeState == null) 0 else {
+        (if (searchFocused) youtubeState.suggestions.size else 0) +
+            (if (youtubeState.activePlaylist != null) 1 else 0) +
+            (if (youtubeState.correctedQuery.isNotBlank()) 1 else 0) +
+            (if (playbackError != null || youtubeState.searchError != null) 1 else 0) +
+            (if (youtubeState.searching) 1 else 0)
+    }
+    val waitingForSongs = isCloudRefreshing || youtubeState?.searching == true || (showDiscovery && discoveryLoading)
+    LaunchedEffect(revealSongId, filteredSongs, headerRows, waitingForSongs) {
+        if (revealSongId == null || waitingForSongs) return@LaunchedEffect
+        val songIndex = filteredSongs.indexOfFirst { it.id == revealSongId }
+        if (songIndex >= 0) {
+            val index = headerRows + songIndex
+            val layout = listState.layoutInfo
+            val alreadyVisible = layout.visibleItemsInfo.any {
+                it.index == index && it.offset >= layout.viewportStartOffset &&
+                    it.offset + it.size <= layout.viewportEndOffset - layout.afterContentPadding
+            }
+            if (!alreadyVisible) listState.scrollToItem(index)
+        }
+        onRevealSongHandled()
     }
 
     // Alphabet index list
@@ -453,6 +505,32 @@ fun SongsLibraryScreen(
                 }
             }
 
+            if (showDiscovery) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(YouTubeDiscovery.entries) { category ->
+                        val active = discoveryCategory == category
+                        FilterChip(
+                            selected = active,
+                            onClick = {
+                                discoveryCategory = category
+                                keyboard?.hide()
+                                focusManager.clearFocus()
+                                scope.launch { listState.scrollToItem(0) }
+                            },
+                            label = { Text(category.label) },
+                            shape = RoundedCornerShape(24.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = accent.copy(alpha = .18f),
+                                selectedLabelColor = accent,
+                                labelColor = TextMuted
+                            )
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
 
             val refreshModifier = if (isCloudMode) {
@@ -473,6 +551,20 @@ fun SongsLibraryScreen(
                     ) {
                         if (youtube != null && youtubeState != null) {
                             youTubeSearchItems(youtubeState, searchFocused, playbackError, onRetryPlayback, youtube, ::submitYouTubeSearch)
+                            if (showDiscovery && discoveredSongs.isEmpty()) {
+                                item("youtube_discovery_status") {
+                                    Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        when {
+                                            discoveryLoading -> CircularProgressIndicator(Modifier.size(24.dp), color = accent)
+                                            discoveryFailed -> {
+                                                Text("No se pudieron cargar las sugerencias.", color = TextMuted)
+                                                TextButton(onClick = { discoveryAttempt++ }) { Text("Reintentar", color = accent) }
+                                            }
+                                            else -> Text("Esta categoría aún no tiene sugerencias.", color = TextMuted)
+                                        }
+                                    }
+                                }
+                            }
                         } else if (filteredSongs.isEmpty() && !isCloudRefreshing) item {
                             Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("No hay canciones con estas opciones", color = TextMuted)
@@ -743,7 +835,7 @@ fun SongsLibraryScreen(
             SongOptionsMenuModal(
                 song = song,
                 isFavorite = isFav,
-                onDownload = cloudDownloadName(song)?.let { filename ->
+                onDownload = if (song.isOnline) ({ onYouTubeDownload(song) }) else cloudDownloadName(song)?.let { filename ->
                     {
                         if (android.os.Build.VERSION.SDK_INT >= 29) onCloudDownload(song, null)
                         else {

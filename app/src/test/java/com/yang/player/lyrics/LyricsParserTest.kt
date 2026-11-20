@@ -55,6 +55,73 @@ class LyricsParserTest {
         assertNull(LyricsParser.parse(" \n"))
     }
 
+    @Test fun `parallel Spanish and English cues share time without stealing the active line`() {
+        val lyrics = LyricsParser.parse(
+            """
+            [00:02.013]Cuando llega la noche
+            [00:02.013]When the night comes
+            [00:06.500]Quiero volver contigo
+            [00:06.500]I want to go back with you
+            [00:10]Pero tú sabes que siempre vuelvo
+            [00:10]But you know that I always come back
+            """.trimIndent(),
+            15_000
+        )!!
+        val english = lyrics.translation!!
+        assertEquals(LyricsLanguage.SPANISH, lyrics.language)
+        assertEquals(LyricsLanguage.ENGLISH, english.language)
+        assertEquals(listOf(2013L, 6500L, 10_000L), lyrics.lines.map { it.startMs })
+        assertEquals(lyrics.lines.map { it.startMs }, english.lines.map { it.startMs })
+        assertEquals("Cuando llega la noche", lyrics.lines[lyrics.activeIndex(4250)].text)
+        assertEquals("When the night comes", english.lines[english.activeIndex(4250)].text)
+    }
+
+    @Test fun `parallel English source remains original when Spanish is second`() {
+        val lyrics = LyricsParser.parse(
+            """
+            [00:01]You know that I am here
+            [00:01]Tú sabes que estoy aquí
+            [00:03]But you are always with me
+            [00:03]Pero tú siempre estás conmigo
+            [00:05]When the night comes I will stay
+            [00:05]Cuando llega la noche quiero quedarme
+            """.trimIndent()
+        )!!
+        assertEquals(LyricsLanguage.ENGLISH, lyrics.language)
+        assertEquals(LyricsLanguage.SPANISH, lyrics.translation?.language)
+    }
+
+    @Test fun `alternating sung languages keep every cue when timestamps differ`() {
+        val lyrics = LyricsParser.parse(
+            """
+            [00:01]Cuando llega la noche
+            [00:02]I know that you are there
+            [00:03]Quiero volver contigo
+            [00:04]But we still have time
+            [00:05]Tú sabes que siempre vuelvo
+            [00:06]When the morning comes around
+            """.trimIndent()
+        )!!
+        assertNull(lyrics.translation)
+        assertEquals(6, lyrics.lines.size)
+        assertEquals("I know that you are there", lyrics.lines[lyrics.activeIndex(2000)].text)
+    }
+
+    @Test fun `explicit vocal parts are not classified as translations`() {
+        val lyrics = LyricsParser.parse(
+            """
+            [00:01]v1:Tú sabes que estoy aquí
+            [00:01]v2:You know that I am here
+            [00:03]v1:Pero tú siempre estás conmigo
+            [00:03]v2:But you are always with me
+            [00:05]v1:Cuando llega la noche quiero quedarme
+            [00:05]v2:When the night comes I will stay
+            """.trimIndent()
+        )!!
+        assertNull(lyrics.translation)
+        assertEquals(6, lyrics.lines.size)
+    }
+
     @Test fun `SRT preserves cue end and line breaks`() {
         val result = LyricsParser.parse("1\n00:00:01,200 --> 00:00:03,000\nOne\nTwo\n\n2\n00:00:04,000 --> 00:00:05,000\nThree")!!
         assertEquals("One\nTwo", result.lines[0].text)

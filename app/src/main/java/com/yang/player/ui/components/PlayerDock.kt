@@ -59,6 +59,7 @@ fun PlayerDock(
     onOpenPlayer: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    showDownloads: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val bottomSpacing by animateDpAsState(
@@ -106,6 +107,7 @@ fun PlayerDock(
             ) {
                 BottomNavBar(
                     selectedTab = selectedTab,
+                    showDownloads = showDownloads,
                     onTabSelected = onTabSelected,
                     backdropLayer = backdropLayer,
                     backdropOrigin = backdropOrigin,

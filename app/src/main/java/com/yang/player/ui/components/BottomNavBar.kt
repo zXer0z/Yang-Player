@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yang.player.ui.theme.LocalArtworkAccent
@@ -39,6 +41,7 @@ enum class NavigationTab(val label: String, val icon: ImageVector) {
     INICIO("Inicio", Icons.Outlined.Home),
     CANCIONES("Canciones", Icons.Default.MusicNote),
     HI_FI("Hi-Fi", Icons.Default.GraphicEq),
+    DESCARGADAS("Descargadas", Icons.Rounded.Download),
     TU("Tú", Icons.Outlined.Person)
 }
 
@@ -47,6 +50,7 @@ fun BottomNavBar(
     selectedTab: NavigationTab,
     onTabSelected: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier,
+    showDownloads: Boolean = false,
     backdropLayer: GraphicsLayer? = null,
     backdropOrigin: Offset = Offset.Zero
 ) {
@@ -67,7 +71,7 @@ fun BottomNavBar(
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            NavigationTab.entries.forEach { tab ->
+            NavigationTab.entries.filter { showDownloads || it != NavigationTab.DESCARGADAS }.forEach { tab ->
                 val isSelected = tab == selectedTab
                 val tint = if (isSelected) LocalArtworkAccent.current else Color.White.copy(alpha = 0.50f)
 
@@ -75,11 +79,12 @@ fun BottomNavBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier
+                        .weight(1f)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onTabSelected(tab)
                         }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 2.dp, vertical = 4.dp)
                 ) {
                     Icon(
                         imageVector = tab.icon,
@@ -92,6 +97,8 @@ fun BottomNavBar(
                         text = tab.label,
                         color = tint,
                         fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                     )
                 }

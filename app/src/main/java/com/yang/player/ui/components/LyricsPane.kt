@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -66,6 +69,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
@@ -82,6 +86,7 @@ import androidx.media3.common.util.UnstableApi
 import com.yang.player.lyrics.LyricLine
 import com.yang.player.lyrics.LyricEffects
 import com.yang.player.lyrics.LyricsDocument
+import com.yang.player.lyrics.LyricsLanguage
 import com.yang.player.lyrics.LyricsRepository
 import com.yang.player.model.Song
 import com.yang.player.ui.theme.LocalArtworkAccent
@@ -115,6 +120,7 @@ fun LyricsPane(
     val scope = rememberCoroutineScope()
     val accent = LocalArtworkAccent.current
     var document by remember(song.id) { mutableStateOf<LyricsDocument?>(null) }
+    var selectedLanguage by remember(song.id) { mutableStateOf(repository.preferredLanguage(song)) }
     var loading by remember(song.id) { mutableStateOf(true) }
     var error by remember(song.id) { mutableStateOf<String?>(null) }
     var loadVersion by remember(song.id) { mutableStateOf(0) }
@@ -144,13 +150,17 @@ fun LyricsPane(
         catch (_: Exception) { error = "No se pudieron leer las letras de esta canción" }
         finally { loading = false }
     }
+    val originalLanguage = document?.language
+    val translation = document?.translation
+    val translationLanguage = translation?.language
+    val displayedDocument = if (translationLanguage != null && selectedLanguage == translationLanguage) translation else document
     BackHandler(onBack = onClose)
     val anchor by rememberUpdatedState(remember(positionMs, isPlaying) {
         LyricClockAnchor(positionMs, SystemClock.elapsedRealtime())
     })
     val clock = remember(song.id) { mutableLongStateOf(positionMs) }
     LaunchedEffect(positionMs, isPlaying) { if (!isPlaying) clock.longValue = positionMs }
-    LaunchedEffect(song.id, isPlaying, document?.enhanced) {
+    LaunchedEffect(song.id, isPlaying, displayedDocument?.enhanced) {
         if (isPlaying) {
             while (isActive) withFrameNanos {
                 val sample = anchor
@@ -159,15 +169,15 @@ fun LyricsPane(
             }
         }
     }
-    val activeBreak by remember(document) { derivedStateOf { document?.instrumentalBreakAt(clock.longValue) } }
-    val activeIndex by remember(document) { derivedStateOf {
-        if (document?.instrumentalBreakAt(clock.longValue) != null) -1 else document?.activeIndex(clock.longValue) ?: -1
+    val activeBreak by remember(displayedDocument) { derivedStateOf { displayedDocument?.instrumentalBreakAt(clock.longValue) } }
+    val activeIndex by remember(displayedDocument) { derivedStateOf {
+        if (displayedDocument?.instrumentalBreakAt(clock.longValue) != null) -1 else displayedDocument?.activeIndex(clock.longValue) ?: -1
     } }
     val list = rememberLazyListState()
     val dragging by list.interactionSource.collectIsDraggedAsState()
     var follow by remember(song.id) { mutableStateOf(true) }
     LaunchedEffect(dragging) { if (dragging) follow = false }
-    LaunchedEffect(activeIndex, activeBreak, follow, document) {
+    LaunchedEffect(activeIndex, activeBreak, follow, displayedDocument) {
         val target = activeBreak?.nextLineIndex ?: activeIndex
         if (follow && target >= 0) {
             list.animateScrollToItem(target, -(list.layoutInfo.viewportEndOffset * 0.28f).toInt())
@@ -180,7 +190,7 @@ fun LyricsPane(
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver al reproductor", tint = Color.White) }
             Text(
-                text = when { document?.enhanced == true -> "Palabra por palabra"; document?.synchronized == true -> "Letras sincronizadas"; else -> "Letras" },
+                text = when { displayedDocument?.enhanced == true -> "Palabra por palabra"; displayedDocument?.synchronized == true -> "Letras sincronizadas"; else -> "Letras" },
                 color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp,
                 modifier = Modifier.weight(1f), maxLines = 1
             )
@@ -188,11 +198,24 @@ fun LyricsPane(
                 Icon(Icons.Rounded.FolderOpen, "Elegir archivo de letras", tint = Color.White.copy(alpha = 0.75f))
             }
         }
+        if (!loading && originalLanguage != null && translationLanguage != null) {
+            LyricsLanguageSelector(
+                original = originalLanguage,
+                alternate = translationLanguage,
+                selected = displayedDocument?.language ?: originalLanguage,
+                accent = accent,
+                modifier = Modifier.padding(start = 24.dp, bottom = 4.dp)
+            ) { language ->
+                selectedLanguage = language
+                repository.setPreferredLanguage(song, language)
+                follow = true
+            }
+        }
         if (loading) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = accent, modifier = Modifier.size(30.dp))
             }
-        } else if (document == null) {
+        } else if (displayedDocument == null) {
             Column(Modifier.weight(1f).fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.Center) {
                 Text("Esta canción no tiene letras disponibles", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
@@ -201,7 +224,7 @@ fun LyricsPane(
                 TextButton(onClick = { pickerSong = song; picker.launch(arrayOf("*/*")) }) { Text("Elegir archivo", color = accent) }
             }
         } else {
-            val lyrics = document!!
+            val lyrics = displayedDocument
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -246,6 +269,41 @@ fun LyricsPane(
             IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, "Anterior", tint = Color.White) }
             IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (isPlaying) "Pausar" else "Reproducir", tint = Color.White) }
             IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, "Siguiente", tint = Color.White) }
+        }
+    }
+}
+
+@Composable
+private fun LyricsLanguageSelector(
+    original: LyricsLanguage,
+    alternate: LyricsLanguage,
+    selected: LyricsLanguage,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onSelect: (LyricsLanguage) -> Unit
+) {
+    Row(
+        modifier.selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (language in listOf(original, alternate)) {
+            val active = language == selected
+            Box(
+                Modifier.clip(CircleShape)
+                    .background(if (active) accent.copy(alpha = .2f) else Color.White.copy(alpha = .08f))
+                    .selectable(selected = active, role = Role.Tab, onClick = { onSelect(language) })
+                    .heightIn(min = 40.dp)
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    language.label,
+                    color = if (active) accent else Color.White.copy(alpha = .75f),
+                    fontSize = 13.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium
+                )
+            }
         }
     }
 }

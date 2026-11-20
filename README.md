@@ -30,6 +30,9 @@ Las portadas musicales pertenecen a sus respectivos titulares; no se distribuyen
 - Consultar estadísticas locales de tiempo de escucha, canciones y artistas.
 - Elegir Dispositivo, Navidrome o YouTube en Inicio y Canciones. En YouTube, Inicio muestra recomendaciones y playlists, y Canciones ofrece autosugerencias y resultados paginados.
 - Deslizar hacia abajo en Inicio para actualizar YouTube. Conectar una cuenta añade sus recomendaciones y playlists personales.
+- Ver videos de YouTube con selector de calidad, pantalla completa, comentarios y sugerencias.
+- Descargar audio o video a una carpeta elegida y abrir los archivos desde Descargadas junto a Hi-Fi cuando YouTube está activo. Los audios también aparecen en Dispositivo.
+- Recibir avisos de versiones nuevas de GitHub Releases. Puedes comprobarlas en Tú → Ajustes → Buscar actualizaciones. Android confirma la instalación.
 - Usar un fondo desenfocado basado en la carátula en el reproductor y su menú con el tema dinámico. Los modos OLED y acento personalizado aplican sus propios colores.
 - Eliminar un archivo de audio permanentemente con confirmación de Android y actualizar sus referencias en la biblioteca.
 

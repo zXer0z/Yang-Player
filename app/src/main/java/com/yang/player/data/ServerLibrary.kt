@@ -35,6 +35,7 @@ enum class CloudStreamQuality(val key: String, val label: String, val format: St
 }
 
 data class CloudPlaylistSummary(val id: String, val name: String, val songIds: List<String>)
+internal data class ServerLyricText(val value: String, val language: String?)
 internal data class LibraryTrack(val song: Song, val filename: String, val mime: String, val navidromeId: String)
 internal data class LibraryPage(val tracks: List<LibraryTrack>, val nextOffset: Int?)
 
@@ -60,17 +61,21 @@ internal class LibraryLogin(val base: String, val user: String, val password: St
 
 internal object ServerLibrary {
     const val SCHEME = "yanglibrary"
-    const val DEFAULT_URL = ""
     const val COVER_AUTHORITY = BuildConfig.APPLICATION_ID + ".serverart"
-    const val modePreferenceKey = "public_server"
+    const val modePreferenceKey = "server_enabled"
     private const val PAGE_SIZE = 60
 
-    private fun preferences(context: Context) = context.noBackupFilesDir.resolve("navidrome-public-login.json")
+    private fun preferences(context: Context) = context.noBackupFilesDir.resolve("navidrome-login.json")
 
-    fun saved(context: Context): LibraryLogin? = runCatching {
-        val json = JSONObject(preferences(context).readText())
-        login(json.getString("base"), json.getString("user"), json.getString("password"))
-    }.getOrNull()
+    fun saved(context: Context): LibraryLogin? =
+        listOf(preferences(context), context.noBackupFilesDir.resolve("navidrome-public-login.json"))
+            .sortedByDescending { it.lastModified() }
+            .firstNotNullOfOrNull { file ->
+                runCatching {
+                    val json = JSONObject(file.readText())
+                    login(json.getString("base"), json.getString("user"), json.getString("password"))
+                }.getOrNull()
+            }
 
     fun login(address: String, user: String, password: String): LibraryLogin {
         val base = address.trim().trimEnd('/')
@@ -249,37 +254,33 @@ internal object ServerLibrary {
         queryList(profile, "updatePlaylist", args)
     }
 
-    fun lyrics(context: Context, mediaUri: String, artist: String, title: String): String? {
-        val profile = saved(context) ?: return null
+    fun lyrics(context: Context, mediaUri: String, artist: String, title: String): List<ServerLyricText> {
+        val profile = saved(context) ?: return emptyList()
         val parsed = Uri.parse(mediaUri)
-        if (parsed.scheme != SCHEME || parsed.host != profile.id || parsed.pathSegments.size != 2) return null
+        if (parsed.scheme != SCHEME || parsed.host != profile.id || parsed.pathSegments.size != 2) return emptyList()
         val trackId = parsed.pathSegments.first()
-        runCatching {
+        val structured = runCatching {
             val data = query(profile, "getLyricsBySongId", "id" to trackId)
             val list = data.optJSONObject("lyricsList")?.optJSONArray("structuredLyrics")
-            val blocks = objects(list)
-            val picked = blocks.firstOrNull { it.optBoolean("synced") } ?: blocks.firstOrNull()
-            val lines = objects(picked?.optJSONArray("line"))
-            if (lines.isNotEmpty()) {
-                val synced = picked?.optBoolean("synced") == true
-                return lines.mapNotNull { line ->
+            objects(list).mapNotNull { block ->
+                val synced = block.optBoolean("synced")
+                val value = objects(block.optJSONArray("line")).joinToString("\n") { line ->
                     val text = line.optString("value")
                     if (synced && line.has("start")) {
                         val ms = line.optLong("start").coerceAtLeast(0L)
-                        val totalCs = ms / 10L
-                        val cs = totalCs % 100L
-                        val totalSec = totalCs / 100L
-                        val sec = totalSec % 60L
-                        val min = totalSec / 60L
-                        "[%02d:%02d.%02d]%s".format(java.util.Locale.US, min, sec, cs, text)
+                        "[%02d:%02d.%03d]%s".format(java.util.Locale.US, ms / 60_000L, ms / 1000L % 60L, ms % 1000L, text)
                     } else text
-                }.joinToString("\n").takeIf { it.isNotBlank() }
+                }
+                value.takeIf(String::isNotBlank)?.let { ServerLyricText(it, block.optString("lang")) }
             }
-        }
+        }.getOrDefault(emptyList())
+        if (structured.isNotEmpty()) return structured
+
         return runCatching {
             val data = query(profile, "getLyrics", "artist" to artist, "title" to title)
-            data.optJSONObject("lyrics")?.optString("value")?.takeIf { it.isNotBlank() }
-        }.getOrNull()
+            val value = data.optJSONObject("lyrics")?.optString("value").orEmpty()
+            if (value.isNotBlank()) listOf(ServerLyricText(value, null)) else emptyList()
+        }.getOrDefault(emptyList())
     }
 
     private fun query(profile: LibraryLogin, method: String, vararg arguments: Pair<String, String>): JSONObject =

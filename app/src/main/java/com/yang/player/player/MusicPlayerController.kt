@@ -45,6 +45,7 @@ class MusicPlayerController(private val context: Context) {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
     private var pendingPlayback: (() -> Unit)? = null
+    private var videoHoldToken: Any? = null
 
     private val savedPlayback = PlaybackSessionStore(context).load()
     private var released = false
@@ -191,9 +192,45 @@ class MusicPlayerController(private val context: Context) {
         }
     }
 
+    fun videoClock(songId: String): VideoClock? {
+        val controller = mediaController ?: return null
+        if (controller.currentMediaItem?.mediaId != songId) return null
+        return VideoClock(
+            positionMs = controller.currentPosition.coerceAtLeast(0L),
+            playing = controller.isPlaying,
+            speed = controller.playbackParameters.speed,
+            playRequested = controller.playbackState != Player.STATE_ENDED &&
+                (controller.playWhenReady || videoHoldToken != null)
+        )
+    }
+
+    fun holdAudioForVideo(songId: String): (() -> Unit)? {
+        val controller = mediaController ?: return null
+        if (controller.currentMediaItem?.mediaId != songId || !controller.playWhenReady ||
+            controller.playbackState == Player.STATE_ENDED
+        ) return null
+        val index = controller.currentMediaItemIndex
+        val token = Any()
+        videoHoldToken = token
+        controller.pause()
+        return {
+            if (videoHoldToken === token) {
+                videoHoldToken = null
+                if (mediaController === controller && controller.currentMediaItem?.mediaId == songId &&
+                    controller.currentMediaItemIndex == index && !controller.playWhenReady &&
+                    controller.playbackState != Player.STATE_IDLE && controller.playbackState != Player.STATE_ENDED
+                ) controller.play()
+            }
+        }
+    }
+
     fun togglePlayPause() {
         val controller = mediaController
         if (controller == null) { pendingPlayback = { togglePlayPause() }; return }
+        if (videoHoldToken != null) {
+            videoHoldToken = null
+            if (!controller.playWhenReady) return
+        }
         if (controller.currentMediaItem == null) {
             val state = _playerState.value
             state.currentSong?.let { playSong(it, state.queue.ifEmpty { listOf(it) }, state.currentPositionMs, state.currentIndex) }
@@ -406,6 +443,7 @@ class MusicPlayerController(private val context: Context) {
         // ExoPlayer owns automatic advancement and honors repeat OFF/ALL/ONE.
         // Do not restart the queue when playback reaches STATE_ENDED.
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            videoHoldToken = null
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT ||
                 (mediaController?.currentMediaItemIndex != _playerState.value.currentIndex && mediaItem?.mediaId == sessionSong?.id)) {
                 flushListeningHistory()
@@ -413,6 +451,7 @@ class MusicPlayerController(private val context: Context) {
             }
         }
         override fun onPlayerError(error: PlaybackException) {
+            videoHoldToken = null
             Log.e("YangPlayer", "Playback error: ${error.errorCodeName}")
             stopProgressTracking()
         }

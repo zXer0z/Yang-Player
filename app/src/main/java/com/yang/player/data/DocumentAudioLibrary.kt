@@ -83,6 +83,9 @@ class DocumentAudioLibrary(private val context: Context) {
         return readSong(uri, name, resolver.getType(uri))
     }
 
+    internal fun openDownload(uri: Uri): Song =
+        open(uri).copy(dataPath = storagePath(uri, DocumentsContract.getDocumentId(uri)).orEmpty())
+
     private fun readSong(uri: Uri, filename: String, mime: String?, dateAdded: Long = 0L): Song {
         val reader = MediaMetadataRetriever()
         try {

@@ -3,12 +3,18 @@ package com.yang.player.lyrics
 data class LyricSegment(val startMs: Long, val endMs: Long, val from: Int, val until: Int)
 data class LyricLine(val text: String, val startMs: Long? = null, val endMs: Long? = null, val segments: List<LyricSegment> = emptyList())
 data class InstrumentalBreak(val startMs: Long, val endMs: Long, val nextLineIndex: Int)
-data class LyricsDocument(val lines: List<LyricLine>) {
+data class LyricsDocument(
+    val lines: List<LyricLine>,
+    val language: LyricsLanguage? = null,
+    val translation: LyricsDocument? = null,
+    private val showInstrumentalBreaks: Boolean = true
+) {
     val synchronized = lines.any { it.startMs != null }
     val enhanced = lines.any { it.segments.isNotEmpty() }
     // Only explicit cue ends or the end of a timed word can establish silence.
     // Plain LRC without such markers cannot tell us when the vocal actually ends.
     val instrumentalBreaks: List<InstrumentalBreak> = buildList {
+        if (!showInstrumentalBreaks) return@buildList
         var vocalEnd = 0L
         lines.forEachIndexed { index, line ->
             val start = line.startMs ?: return@forEachIndexed

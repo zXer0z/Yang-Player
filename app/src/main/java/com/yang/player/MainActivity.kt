@@ -26,9 +26,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawWithContent
@@ -54,11 +56,15 @@ import androidx.media3.common.util.UnstableApi
 import com.yang.player.ui.components.BottomNavBar
 import com.yang.player.ui.components.ArtworkAtmosphere
 import com.yang.player.ui.components.PlayerDock
+import com.yang.player.ui.components.YouTubeDownloadSheet
+import com.yang.player.ui.components.AppUpdatePrompt
+import com.yang.player.ui.components.rememberYouTubeVideo
 import com.yang.player.ui.components.FloatingMiniPlayer
 import com.yang.player.ui.components.NavigationTab
 import com.yang.player.ui.components.LibrarySourceSelector
 import com.yang.player.model.LibrarySource
 import com.yang.player.ui.screens.FullPlayerModal
+import com.yang.player.ui.screens.DownloadsScreen
 import com.yang.player.ui.screens.HiFiAudioScreen
 import com.yang.player.ui.screens.HomeScreen
 import com.yang.player.ui.screens.YouScreen
@@ -166,6 +172,7 @@ fun YangPlayerRootApp(viewModel: PlayerViewModel, onRescan: () -> Unit = { viewM
 @UnstableApi
 @Composable
 private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) {
+    var updateRequest by remember { mutableIntStateOf(0) }
     val screenStateHolder = rememberSaveableStateHolder()
     val librarySource by viewModel.librarySource.collectAsState()
     val isYouTube = librarySource == LibrarySource.YOUTUBE
@@ -190,6 +197,19 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
     val collections by viewModel.collections.collectAsState()
     val account by viewModel.online.account.collectAsState()
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsState()
+    val youtubeDownloadSong by viewModel.youtubeDownloadSong.collectAsState()
+    val youtubeVideoEnabled by viewModel.youtubeVideoEnabled.collectAsState()
+    val currentVideoSong = playerState.currentSong?.takeIf { youtubeVideoEnabled && it.isOnline }
+    var videoOpened by remember(currentVideoSong?.mediaUri, playerState.currentIndex) { mutableStateOf(false) }
+    if (isFullPlayerVisible && currentVideoSong != null) {
+        SideEffect { videoOpened = true }
+    }
+    val video = if (currentVideoSong != null && (isFullPlayerVisible || videoOpened)) {
+        rememberYouTubeVideo(
+            currentVideoSong, playerState.currentIndex, isFullPlayerVisible,
+            viewModel::videoClock, viewModel::holdAudioForVideo
+        )
+    } else null
     val libraryDestination by viewModel.libraryDestination.collectAsState()
     val globalDetail = libraryDestination?.key?.isNotBlank() == true
     val detailTracks = remember(libraryDestination, collections) { when(libraryDestination?.page) {
@@ -215,6 +235,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
     val density = LocalDensity.current
     var dockHeight by remember { mutableStateOf(172.dp) }
     var requestSearchFocus by remember { mutableStateOf(false) }
+    var revealSongId by remember { mutableStateOf<String?>(null) }
     val scrollEvents = remember {
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     }
@@ -340,6 +361,8 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onAudioSettings = { viewModel.selectTab(NavigationTab.HI_FI) },
                         requestSearchFocus = requestSearchFocus,
                         onSearchFocusHandled = { requestSearchFocus = false },
+                        revealSongId = revealSongId,
+                        onRevealSongHandled = { revealSongId = null },
                         isPlaying = playerState.isPlaying,
                         songs = allSongs,
                         favoriteSongs = shownFavorites,
@@ -352,6 +375,7 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                         onViewArtist = viewModel::openArtist,
                         cloudDownloadName = viewModel::cloudDownloadName,
                         onCloudDownload = viewModel::downloadCloudSong,
+                        onYouTubeDownload = viewModel::openYouTubeDownload,
                         isCloudMode = librarySource == LibrarySource.NAVIDROME,
                         isCloudRefreshing = librarySource == LibrarySource.NAVIDROME && cloudLoading,
                         onCloudRefresh = viewModel::reloadCloudLibrary,
@@ -371,9 +395,18 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 NavigationTab.HI_FI -> {
                     HiFiAudioScreen(playerState = playerState, bottomContentPadding = dockHeight + 12.dp)
                 }
+                NavigationTab.DESCARGADAS -> {
+                    if (isYouTube) DownloadsScreen(
+                        dockHeight + 12.dp,
+                        onPlayAudio = viewModel::openAudio,
+                        sourceSelector = sourceSelector
+                    )
+                }
                 NavigationTab.TU -> {
                     YouScreen(viewModel, dockHeight + 12.dp,
-                        onSongs = { viewModel.selectTab(NavigationTab.CANCIONES) }, onRescan = onRescan)
+                        onSongs = { viewModel.selectTab(NavigationTab.CANCIONES) },
+                        onRescan = onRescan,
+                        onCheckUpdates = { updateRequest++ })
                 }
             }
             } } }
@@ -385,12 +418,14 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
             selectedTab = selectedTab,
             currentSong = playerState.currentSong,
             isPlaying = playerState.isPlaying,
+            showDownloads = isYouTube,
             backdropLayer = if (hasNativeBlur) backdropLayer else null,
             backdropOrigin = backdropOrigin,
             onTabSelected = { compactDock = false; viewModel.consumeLibraryDestination(); viewModel.selectTab(it) },
             onHome = { compactDock = false },
             onSearch = {
                 requestSearchFocus = true
+                revealSongId = null
                 viewModel.consumeLibraryDestination()
                 viewModel.selectTab(NavigationTab.CANCIONES)
             },
@@ -421,12 +456,19 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 playbackProgress = viewModel.playbackProgress,
                 playbackPositionMs = viewModel.playbackPositionMs,
                 durationMs = playerState.durationMs,
+                video = video,
+                loadRelatedVideos = viewModel.online::relatedVideos,
+                onPlaySuggestedVideo = viewModel::playSuggestedVideo,
+                onYouTubeDownload = viewModel::openYouTubeDownload,
                 isFavorite = favoriteSongs.any { it.id == playerState.currentSong?.id },
                 isShuffle = playerState.isShuffle,
                 repeatMode = playerState.repeatMode,
                 onShuffle = viewModel::toggleShuffle,
                 onRepeat = viewModel::cycleRepeat,
-                onDismiss = { viewModel.hideFullPlayer() },
+                onDismiss = {
+                    revealSongId = playerState.currentSong?.id
+                    viewModel.hideFullPlayer()
+                },
                 onPlayPause = { viewModel.togglePlayPause() },
                 onNext = { viewModel.next() },
                 onPrevious = { viewModel.previous() },
@@ -442,6 +484,15 @@ private fun YangPlayerContent(viewModel: PlayerViewModel, onRescan: () -> Unit) 
                 onAddToCloudPlaylist = viewModel::addToCloudPlaylist
             )
         }
+        youtubeDownloadSong?.let { download ->
+            YouTubeDownloadSheet(
+                song = download,
+                palette = if (playerState.currentSong?.id == download.id) playingPalette else rememberArtworkPalette(download),
+                themeMode = appearanceConfig.themeMode,
+                onDismiss = viewModel::closeYouTubeDownload
+            )
+        }
+        AppUpdatePrompt(updateRequest)
     }
     }
 }

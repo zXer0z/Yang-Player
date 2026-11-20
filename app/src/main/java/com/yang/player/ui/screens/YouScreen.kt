@@ -42,9 +42,10 @@ import com.yang.player.ui.viewmodel.PlayerViewModel
 
 @UnstableApi
 @Composable
-fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () -> Unit, onRescan: () -> Unit) {
+fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () -> Unit, onRescan: () -> Unit, onCheckUpdates: () -> Unit = {}) {
     val account by viewModel.online.account.collectAsState()
     val cloudMode by viewModel.cloudMode.collectAsState()
+    val youtubeVideoEnabled by viewModel.youtubeVideoEnabled.collectAsState()
     val songs by viewModel.allSongs.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val collections by viewModel.collections.collectAsState()
@@ -160,6 +161,29 @@ fun YouScreen(viewModel: PlayerViewModel, bottomContentPadding: Dp, onSongs: () 
                             )
                         }
                         YouAction(Icons.Rounded.Storage, "Conexión a servidor", "Usa tu propio servidor con Navidrome") { page = "server_library" }
+                        YouAction(Icons.Rounded.SystemUpdate, "Buscar actualizaciones", "Consulta las versiones publicadas en GitHub", onClick = onCheckUpdates)
+                        YouActionRow(
+                            icon = Icons.Rounded.SmartDisplay,
+                            title = "Permitir videos de YouTube",
+                            subtitle = "Abre automáticamente el modo video en las pistas de YouTube",
+                            modifier = Modifier.toggleable(
+                                value = youtubeVideoEnabled,
+                                role = Role.Switch,
+                                onValueChange = viewModel::setYouTubeVideoEnabled
+                            )
+                        ) {
+                            Switch(
+                                checked = youtubeVideoEnabled,
+                                onCheckedChange = null,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = accent.copy(alpha = 0.85f),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.10f),
+                                    uncheckedBorderColor = Color.White.copy(alpha = 0.18f)
+                                )
+                            )
+                        }
                     }
                     YouSection("Personalización")
                     Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.035f))) {
